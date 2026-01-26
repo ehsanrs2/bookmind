@@ -1,0 +1,26 @@
+{
+  "scope_id": "scope_chat_attachment_qa_01",
+  "mode": "book_qa",
+  "library": "chat_attachment",
+  "chat_id": "chat_9f3a2c",
+  "book_ids": ["book_physics_11"],
+  "selectors": {
+    "chapters": [],
+    "page_ranges": [],
+    "page_reference": "pdf",
+    "tags": [],
+    "tag_mode": "ANY"
+  },
+  "combine_logic": {
+    "within_group": "OR",
+    "between_groups": "AND"
+  },
+  "citations_required": true,
+  "retrieval": {
+    "enabled": true,
+    "top_k": 8,
+    "min_score": 0.2,
+    "max_context_tokens": 2200,
+    "rerank": false
+  }
+}

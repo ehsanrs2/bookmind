@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openwebui.com/schemas/bookmind/chunk-metadata.schema.json",
+  "title": "Bookmind Chunk Metadata",
+  "type": "object",
+  "required": [
+    "library",
+    "book_id",
+    "source_id",
+    "chunk_id",
+    "tags",
+    "acl_policy_id"
+  ],
+  "properties": {
+    "library": {
+      "type": "string",
+      "enum": ["reference", "chat_attachment"]
+    },
+    "tenant_id": {
+      "type": "string"
+    },
+    "chat_id": {
+      "type": "string"
+    },
+    "book_id": {
+      "type": "string"
+    },
+    "source_id": {
+      "type": "string"
+    },
+    "chunk_id": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "acl_policy_id": {
+      "type": "string"
+    },
+    "pdf_page_start": {
+      "anyOf": [
+        {"type": "integer", "minimum": 1},
+        {"type": "null"}
+      ]
+    },
+    "pdf_page_end": {
+      "anyOf": [
+        {"type": "integer", "minimum": 1},
+        {"type": "null"}
+      ]
+    },
+    "book_page_start": {
+      "anyOf": [
+        {"type": "integer", "minimum": 1},
+        {"type": "null"}
+      ]
+    },
+    "book_page_end": {
+      "anyOf": [
+        {"type": "integer", "minimum": 1},
+        {"type": "null"}
+      ]
+    },
+    "chapter_id": {
+      "anyOf": [
+        {"type": "string"},
+        {"type": "null"}
+      ]
+    },
+    "chapter_title": {
+      "anyOf": [
+        {"type": "string"},
+        {"type": "null"}
+      ]
+    },
+    "section_path": {
+      "anyOf": [
+        {"type": "string"},
+        {"type": "null"}
+      ]
+    },
+    "created_at": {
+      "anyOf": [
+        {"type": "string", "format": "date-time"},
+        {"type": "null"}
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"library": {"const": "chat_attachment"}}
+      },
+      "then": {
+        "required": ["chat_id"]
+      }
+    }
+  ],
+  "additionalProperties": true
+}

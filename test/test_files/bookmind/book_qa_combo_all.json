@@ -1,0 +1,25 @@
+{
+  "scope_id": "scope_book_qa_combo_all_01",
+  "mode": "book_qa",
+  "library": "reference",
+  "book_ids": ["book_physics_11"],
+  "selectors": {
+    "chapters": ["ch_02"],
+    "page_ranges": [{"from": 55, "to": 60}],
+    "page_reference": "pdf",
+    "tags": ["experiment", "summary"],
+    "tag_mode": "ALL"
+  },
+  "combine_logic": {
+    "within_group": "OR",
+    "between_groups": "AND"
+  },
+  "citations_required": true,
+  "retrieval": {
+    "enabled": true,
+    "top_k": 12,
+    "min_score": 0.18,
+    "max_context_tokens": 2600,
+    "rerank": true
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "scope_id": "scope_exam_generator_01",
+  "mode": "exam_generator",
+  "library": "reference",
+  "book_ids": ["book_physics_11"],
+  "selectors": {
+    "chapters": ["ch_05"],
+    "page_ranges": [],
+    "page_reference": "book",
+    "tags": ["practice"],
+    "tag_mode": "ANY"
+  },
+  "combine_logic": {
+    "within_group": "OR",
+    "between_groups": "AND"
+  },
+  "citations_required": false,
+  "retrieval": {
+    "enabled": true,
+    "top_k": 7,
+    "min_score": 0.2,
+    "max_context_tokens": 2000,
+    "rerank": false
+  }
+}

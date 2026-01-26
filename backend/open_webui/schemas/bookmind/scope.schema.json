@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openwebui.com/schemas/bookmind/scope.schema.json",
+  "title": "Bookmind Scope",
+  "type": "object",
+  "required": [
+    "scope_id",
+    "mode",
+    "library",
+    "selectors",
+    "citations_required",
+    "retrieval"
+  ],
+  "properties": {
+    "scope_id": {
+      "type": "string"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["free_chat", "book_qa", "exam_generator"]
+    },
+    "library": {
+      "type": "string",
+      "enum": ["reference", "chat_attachment"]
+    },
+    "chat_id": {
+      "type": "string"
+    },
+    "book_ids": {
+      "type": "array",
+      "items": {"type": "string"},
+      "default": []
+    },
+    "selectors": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "chapters": {
+          "type": "array",
+          "items": {"type": "string"},
+          "default": []
+        },
+        "page_ranges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["from", "to"],
+            "properties": {
+              "from": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "to": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "default": []
+        },
+        "page_reference": {
+          "type": "string",
+          "enum": ["pdf", "book"],
+          "default": "pdf"
+        },
+        "tags": {
+          "type": "array",
+          "items": {"type": "string"},
+          "default": []
+        },
+        "tag_mode": {
+          "type": "string",
+          "enum": ["ANY", "ALL"],
+          "default": "ANY"
+        }
+      }
+    },
+    "combine_logic": {
+      "type": "object",
+      "properties": {
+        "within_group": {
+          "type": "string",
+          "enum": ["OR", "AND"],
+          "default": "OR"
+        },
+        "between_groups": {
+          "type": "string",
+          "enum": ["AND", "OR"],
+          "default": "AND"
+        }
+      },
+      "default": {"within_group": "OR", "between_groups": "AND"}
+    },
+    "citations_required": {
+      "type": "boolean"
+    },
+    "retrieval": {
+      "type": "object",
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "top_k": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 8
+        },
+        "min_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.2
+        },
+        "max_context_tokens": {
+          "type": "integer",
+          "minimum": 256,
+          "maximum": 16000,
+          "default": 2200
+        },
+        "rerank": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"mode": {"const": "free_chat"}}
+      },
+      "then": {
+        "properties": {
+          "citations_required": {"const": false},
+          "retrieval": {
+            "properties": {"enabled": {"const": false}}
+          },
+          "book_ids": {"maxItems": 0}
+        },
+        "required": ["book_ids", "citations_required", "retrieval"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"mode": {"const": "book_qa"}}
+      },
+      "then": {
+        "properties": {
+          "citations_required": {"const": true}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"library": {"const": "chat_attachment"}}
+      },
+      "then": {
+        "required": ["chat_id"]
+      }
+    }
+  ]
+}

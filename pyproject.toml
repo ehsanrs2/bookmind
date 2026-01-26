@@ -85,6 +85,7 @@ dependencies = [
     "pyxlsb==1.0.10",
     "xlrd==2.0.2",
     "validators==0.35.0",
+    "jsonschema==4.23.0",
     "psutil",
     "sentencepiece",
     "soundfile==0.13.1",

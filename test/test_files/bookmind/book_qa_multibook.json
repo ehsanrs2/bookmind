@@ -1,0 +1,25 @@
+{
+  "scope_id": "scope_book_qa_multibook_01",
+  "mode": "book_qa",
+  "library": "reference",
+  "book_ids": ["book_physics_11", "book_math_02"],
+  "selectors": {
+    "chapters": ["ch_01"],
+    "page_ranges": [],
+    "page_reference": "book",
+    "tags": [],
+    "tag_mode": "ANY"
+  },
+  "combine_logic": {
+    "within_group": "OR",
+    "between_groups": "AND"
+  },
+  "citations_required": true,
+  "retrieval": {
+    "enabled": true,
+    "top_k": 9,
+    "min_score": 0.2,
+    "max_context_tokens": 2300,
+    "rerank": false
+  }
+}
