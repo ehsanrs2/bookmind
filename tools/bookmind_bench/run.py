@@ -4,9 +4,15 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
 from pathlib import Path
 
 from engines.marker_engine import run_marker_pdf
+from engines.paddleocr_engine import (
+    list_page_images,
+    run_paddleocr,
+    run_paddleocr_on_image,
+)
 from render_pdf import parse_pages, render_pdf_pages
 
 
@@ -89,11 +95,67 @@ def _cmd_marker(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_paddleocr(_args: argparse.Namespace) -> int:
-    raise SystemExit(
-        "PaddleOCR engine integration is not implemented yet. "
-        "Use this command as a placeholder for offline verification."
+def _resolve_paddleocr_cache_dir(arg_value: str | None) -> str | None:
+    override = os.environ.get("BOOKMIND_PADDLEOCR_CACHE_DIR")
+    if override:
+        return override
+    if arg_value:
+        return arg_value
+    default_dir = (
+        Path(__file__).resolve().parent / "offline_bundle" / "models" / "paddleocr"
     )
+    if default_dir.exists():
+        return default_dir.as_posix()
+    return None
+
+
+def _cmd_paddleocr(args: argparse.Namespace) -> int:
+    img_dir = Path(args.imgdir)
+    out_dir = Path(args.out)
+
+    if not img_dir.exists():
+        raise SystemExit(f"Image directory not found: {img_dir}")
+
+    images = list_page_images(str(img_dir))
+    if not images:
+        raise SystemExit(f"No page images found in {img_dir}")
+
+    max_page = max(page for page, _ in images)
+    pages = None
+    if args.pages:
+        pages = parse_pages(args.pages, max_page)
+        if not pages:
+            raise SystemExit("No pages selected. Check --pages range.")
+
+    cache_dir = _resolve_paddleocr_cache_dir(args.cache_dir)
+    records = run_paddleocr(
+        img_dir=str(img_dir),
+        pages=pages,
+        lang=args.lang,
+        use_gpu=args.use_gpu,
+        cache_dir=cache_dir,
+    )
+
+    output_path = out_dir / "paddleocr" / "output.jsonl"
+    write_jsonl(output_path, records)
+    print(f"PaddleOCR wrote {len(records)} block(s) to {output_path}")
+    return 0
+
+
+def _cmd_paddleocr_smoke(args: argparse.Namespace) -> int:
+    image_path = Path(args.image)
+    if not image_path.exists():
+        raise SystemExit(f"Image not found: {image_path}")
+
+    cache_dir = _resolve_paddleocr_cache_dir(args.cache_dir)
+    records = run_paddleocr_on_image(
+        image_path=str(image_path),
+        lang=args.lang,
+        use_gpu=args.use_gpu,
+        cache_dir=cache_dir,
+    )
+    print(f"PaddleOCR smoke extracted {len(records)} block(s) from {image_path}")
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -125,9 +187,46 @@ def build_parser() -> argparse.ArgumentParser:
     marker.set_defaults(func=_cmd_marker)
 
     paddleocr = subparsers.add_parser(
-        "paddleocr", help="Run PaddleOCR/PP-Structure (placeholder)"
+        "paddleocr", help="Run PaddleOCR PP-Structure on rendered page images"
+    )
+    paddleocr.add_argument("--imgdir", required=True, help="Directory of PNG pages")
+    paddleocr.add_argument("--out", required=True, help="Output directory for runs")
+    paddleocr.add_argument(
+        "--pages",
+        required=False,
+        help='Optional page ranges (1-based), e.g. "1-5,7,9-10"',
+    )
+    paddleocr.add_argument("--lang", default="en", help="OCR language (default en)")
+    paddleocr.add_argument(
+        "--use_gpu",
+        default=True,
+        type=lambda v: str(v).lower() in {"1", "true", "yes", "y"},
+        help="Enable GPU (default true)",
+    )
+    paddleocr.add_argument(
+        "--cache_dir",
+        required=False,
+        help="Override PaddleOCR cache dir (defaults to offline bundle if present)",
     )
     paddleocr.set_defaults(func=_cmd_paddleocr)
+
+    paddleocr_smoke = subparsers.add_parser(
+        "paddleocr-smoke", help=argparse.SUPPRESS
+    )
+    paddleocr_smoke.add_argument("--image", required=True, help="Path to a PNG image")
+    paddleocr_smoke.add_argument("--lang", default="en", help="OCR language")
+    paddleocr_smoke.add_argument(
+        "--use_gpu",
+        default=True,
+        type=lambda v: str(v).lower() in {"1", "true", "yes", "y"},
+        help="Enable GPU (default true)",
+    )
+    paddleocr_smoke.add_argument(
+        "--cache_dir",
+        required=False,
+        help="Override PaddleOCR cache dir (defaults to offline bundle if present)",
+    )
+    paddleocr_smoke.set_defaults(func=_cmd_paddleocr_smoke)
 
     return parser
 

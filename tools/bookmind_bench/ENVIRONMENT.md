@@ -8,6 +8,7 @@ and lets you ship an offline wheel + model bundle to air-gapped machines.
 - Venv: `.venv_bookmind_bench/` (separate from any Open WebUI venv)
 - Requirements: `tools/bookmind_bench/requirements/*.txt`
 - Offline bundle: `tools/bookmind_bench/offline_bundle/` (git-ignored)
+ - PaddleOCR/PP-Structure must be installed in the bench venv (not the app venv)
 
 ## Online prefetch (internet-connected machine)
 1) Create the wheelhouse + download model assets:

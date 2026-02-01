@@ -87,3 +87,20 @@ Page filtering behavior:
 - The runner passes `--pages`/page-range args to Marker when supported.
 - If the local Marker CLI does not accept page ranges, it will process the full PDF
   and filter the normalized JSONL records by the requested page numbers.
+
+## PaddleOCR PP-Structure engine
+
+Command example:
+```
+python tools/bookmind_bench/run.py paddleocr --imgdir bench_runs/images --out bench_runs --pages "1-5"
+```
+
+Output location:
+```
+<out>/paddleocr/output.jsonl
+```
+
+Offline cache behavior:
+- Runtime downloads are disabled. Ensure `tools/bookmind_bench/offline_bundle/models/paddleocr`
+  is populated via `scripts/prefetch_online.sh`.
+- You can override the cache directory with `BOOKMIND_PADDLEOCR_CACHE_DIR` or `--cache_dir`.
