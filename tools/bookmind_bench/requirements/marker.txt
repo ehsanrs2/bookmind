@@ -1,0 +1,2 @@
+# Marker PDF CLI (provides marker_single).
+marker-pdf==0.2.10

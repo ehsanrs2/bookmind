@@ -89,6 +89,13 @@ def _cmd_marker(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_paddleocr(_args: argparse.Namespace) -> int:
+    raise SystemExit(
+        "PaddleOCR engine integration is not implemented yet. "
+        "Use this command as a placeholder for offline verification."
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bookmind-bench",
@@ -116,6 +123,11 @@ def build_parser() -> argparse.ArgumentParser:
         help='Optional page ranges (1-based), e.g. "1-5,7,9-10"',
     )
     marker.set_defaults(func=_cmd_marker)
+
+    paddleocr = subparsers.add_parser(
+        "paddleocr", help="Run PaddleOCR/PP-Structure (placeholder)"
+    )
+    paddleocr.set_defaults(func=_cmd_paddleocr)
 
     return parser
 

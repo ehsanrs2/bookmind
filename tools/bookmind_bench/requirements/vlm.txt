@@ -1,0 +1,5 @@
+# Minimal VLM stack for vLLM + Hugging Face models.
+vllm==0.5.4
+transformers==4.41.2
+accelerate==0.30.1
+pillow==10.3.0

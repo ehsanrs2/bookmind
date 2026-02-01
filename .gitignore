@@ -310,3 +310,8 @@ dist
 cypress/videos
 cypress/screenshots
 .vscode/settings.json
+
+# Bookmind bench offline bundle + venv (scoped).
+tools/bookmind_bench/offline_bundle/*
+!tools/bookmind_bench/offline_bundle/README.md
+.venv_bookmind_bench/

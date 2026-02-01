@@ -1,0 +1,2 @@
+# Minimal deps for the offline bench harness (render + CLI helpers).
+PyMuPDF==1.24.9
