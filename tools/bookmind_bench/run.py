@@ -3,9 +3,25 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 from pathlib import Path
 
+from engines.marker_engine import run_marker_pdf
 from render_pdf import parse_pages, render_pdf_pages
+
+
+def _load_local_io() -> object:
+    io_path = Path(__file__).resolve().parent / "io.py"
+    spec = importlib.util.spec_from_file_location("bookmind_bench_io", io_path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"Unable to load local io module at {io_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_io = _load_local_io()
+write_jsonl = _io.write_jsonl
 
 
 def _cmd_render(args: argparse.Namespace) -> int:
@@ -36,6 +52,43 @@ def _cmd_render(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_marker(args: argparse.Namespace) -> int:
+    pdf_path = Path(args.pdf)
+    out_dir = Path(args.out)
+
+    if not pdf_path.exists():
+        raise SystemExit(f"PDF not found: {pdf_path}")
+
+    import fitz  # PyMuPDF
+
+    with fitz.open(pdf_path) as doc:
+        max_page = doc.page_count
+
+    pages = None
+    if args.pages:
+        pages = parse_pages(args.pages, max_page)
+        if not pages:
+            raise SystemExit("No pages selected. Check --pages range.")
+
+    marker_out_dir = out_dir / "marker"
+    records = run_marker_pdf(
+        pdf_path=pdf_path,
+        output_dir=marker_out_dir,
+        page_range=args.pages if args.pages else None,
+    )
+
+    if pages is not None:
+        page_set = set(pages)
+        records = [record for record in records if record.get("page") in page_set]
+        if not records:
+            raise SystemExit("Marker produced no records for the selected pages.")
+
+    output_path = marker_out_dir / "output.jsonl"
+    write_jsonl(output_path, records)
+    print(f"Marker wrote {len(records)} page(s) to {output_path}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bookmind-bench",
@@ -53,6 +106,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     render.add_argument("--dpi", type=int, default=300, help="Render DPI (default 300)")
     render.set_defaults(func=_cmd_render)
+
+    marker = subparsers.add_parser("marker", help="Run Marker on a PDF locally")
+    marker.add_argument("--pdf", required=True, help="Path to input PDF")
+    marker.add_argument("--out", required=True, help="Output directory for runs")
+    marker.add_argument(
+        "--pages",
+        required=False,
+        help='Optional page ranges (1-based), e.g. "1-5,7,9-10"',
+    )
+    marker.set_defaults(func=_cmd_marker)
 
     return parser
 

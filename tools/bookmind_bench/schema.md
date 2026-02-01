@@ -70,3 +70,20 @@ Each line in `pages.jsonl` should follow this normalized shape:
 - `errors`: List of error strings for page-level failures (empty on success).
 
 This schema is intentionally permissive so different extraction backends can be compared offline without network access.
+
+## Marker engine
+
+Command example:
+```
+python tools/bookmind_bench/run.py marker --pdf path/to/input.pdf --out bench_runs --pages "1-5"
+```
+
+Output location:
+```
+<out>/marker/output.jsonl
+```
+
+Page filtering behavior:
+- The runner passes `--pages`/page-range args to Marker when supported.
+- If the local Marker CLI does not accept page ranges, it will process the full PDF
+  and filter the normalized JSONL records by the requested page numbers.
