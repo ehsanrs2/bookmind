@@ -36,13 +36,76 @@ _Last updated: 2026-02-01_
 - `src/routes/(app)/workspace/knowledge/[id]/+page.svelte` + `src/lib/components/workspace/Knowledge/KnowledgeBase.svelte` - KB detail, file management, web/youtube ingestion.
 - `src/lib/apis/knowledge/*` + `src/lib/apis/retrieval/*` - API calls for KB CRUD and ingestion endpoints.
 
+## Request-flow diagram (short)
+```
+UI Chat.svelte
+  -> POST /api/chat/completions (JSON payload)
+    -> main.py:chat_completion
+      -> utils/middleware.py:process_chat_payload
+        -> (optional) tools/memory/web_search/files handlers
+        -> retrieval/utils.py:get_sources_from_items
+      -> routers/openai.py:/chat/completions (if OpenAI-compatible provider)
+      -> utils/middleware.py:process_chat_response
+    -> socket events (chat:completion, chat:tags, chat:title)
+```
+
 ## Integration points (exact functions/classes/routes)
 - `/api/chat/completions` -> `backend/open_webui/main.py:chat_completion`
+  - Request payload (UI -> server, built in `src/lib/components/chat/Chat.svelte`):
+    ```json
+    {
+      "stream": true,
+      "model": "model-id",
+      "messages": [{"role":"user","content":"..."}],
+      "params": {"stream_response": true, "stop": ["..."]},
+      "files": [{"id":"file-id","type":"file"}],
+      "filter_ids": ["filter-id"],
+      "tool_ids": ["server:mcp:...","tool-id"],
+      "tool_servers": [{"id":"server-id","specs":[...]}],
+      "features": {"memory":true,"web_search":false,"image_generation":false,"code_interpreter":false,"voice":false},
+      "variables": {"user_name":"...","user_location":"..."},
+      "model_item": {"id":"model-id","direct":false},
+      "session_id": "socket-id",
+      "chat_id": "chat-id",
+      "id": "message-id",
+      "parent_id": "parent-message-id",
+      "parent_message": {"id":"parent-message-id","content":"..."},
+      "background_tasks": {"title_generation":true,"tags_generation":true,"follow_up_generation":true},
+      "stream_options": {"include_usage": true}
+    }
+    ```
+  - Server augments into `metadata` in `chat_completion` (chat_id/message_id/session_id/files/tool ids/etc) before pipeline.
+- `/api/v1/chat/completions` (OpenAI-compat) -> `backend/open_webui/routers/openai.py:generate_chat_completion`
+  - OpenAI-style payload; server filters/overrides params based on model config and forwards to provider `/chat/completions`.
 - `process_chat_payload` -> `backend/open_webui/utils/middleware.py:process_chat_payload`
+  - Entry for memory/web search/tools/files injection and RAG context assembly.
 - File/RAG injection -> `backend/open_webui/utils/middleware.py:chat_completion_files_handler`
+  - Reads `metadata.files`, runs query generation, fetches sources via retrieval utils.
 - RAG retrieval -> `backend/open_webui/retrieval/utils.py:get_sources_from_items`
+  - Inputs: `items` (files/notes/chats/urls/collections), `queries`, embedding fn, reranker fn.
 - Knowledge CRUD + ACL -> `backend/open_webui/routers/knowledge.py` + `backend/open_webui/models/knowledge.py`
-- File ingestion -> `backend/open_webui/routers/retrieval.py:process_file` and `backend/open_webui/routers/retrieval.py:process_files_batch`
+  - Create KB: `POST /api/v1/knowledge/create` payload:
+    ```json
+    { "name": "KB name", "description": "KB description", "access_control": {"read": {...}, "write": {...}} }
+    ```
+  - Add file to KB: `POST /api/v1/knowledge/{id}/file/add` payload:
+    ```json
+    { "file_id": "file-id" }
+    ```
+  - Update file in KB: `POST /api/v1/knowledge/{id}/file/update` payload:
+    ```json
+    { "file_id": "file-id" }
+    ```
+  - Remove file from KB: `POST /api/v1/knowledge/{id}/file/remove` payload:
+    ```json
+    { "file_id": "file-id" }
+    ```
+- File ingestion -> `backend/open_webui/routers/retrieval.py:process_file` / `process_files_batch`
+  - Process file: `POST /api/v1/retrieval/process/file` payload:
+    ```json
+    { "file_id": "file-id", "content": "optional text", "collection_name": "optional-collection" }
+    ```
+  - Batch: `POST /api/v1/retrieval/process/files/batch` payload is a list of the same form.
 - Vector client -> `backend/open_webui/retrieval/vector/factory.py:VECTOR_DB_CLIENT`
 - ACL checks -> `backend/open_webui/utils/access_control.py`
 - Auth user context -> `backend/open_webui/utils/auth.py:get_verified_user`
