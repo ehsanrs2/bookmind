@@ -13,6 +13,7 @@ from engines.paddleocr_engine import (
     run_paddleocr,
     run_paddleocr_on_image,
 )
+from engines.vlm_caption_engine import run_vlm_caption_jobs
 from engines.vlm_hook import plan_vlm_jobs
 from render_pdf import parse_pages, render_pdf_pages
 
@@ -188,6 +189,29 @@ def _cmd_paddleocr_smoke(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_vlm(args: argparse.Namespace) -> int:
+    out_dir = Path(args.out)
+    jobs_path = Path(args.jobs)
+    paddleocr_path = Path(args.paddleocr_jsonl) if args.paddleocr_jsonl else None
+
+    if not jobs_path.exists():
+        raise SystemExit(f"VLM jobs JSONL not found: {jobs_path}")
+    if paddleocr_path and not paddleocr_path.exists():
+        raise SystemExit(f"PaddleOCR JSONL not found: {paddleocr_path}")
+
+    written = run_vlm_caption_jobs(
+        jobs_jsonl=str(jobs_path),
+        out_dir=str(out_dir),
+        endpoint=args.endpoint,
+        model=args.model,
+        paddleocr_jsonl=str(paddleocr_path) if paddleocr_path else None,
+        use_ocr_hints=args.use_ocr_hints,
+    )
+    output_path = out_dir / "vlm" / "output.jsonl"
+    print(f"VLM wrote {written} caption(s) to {output_path}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bookmind-bench",
@@ -288,6 +312,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output path for VLM job JSONL (defaults to <out>/paddleocr/vlm_jobs.jsonl)",
     )
     plan_vlm.set_defaults(func=_cmd_plan_vlm)
+
+    vlm = subparsers.add_parser(
+        "vlm", help="Run VLM figure captioning jobs with a local endpoint"
+    )
+    vlm.add_argument("--jobs", required=True, help="Path to VLM jobs JSONL")
+    vlm.add_argument("--out", required=True, help="Output directory for runs")
+    vlm.add_argument(
+        "--endpoint",
+        default="http://127.0.0.1:8000/v1",
+        help="Local OpenAI-compatible VLM endpoint (default http://127.0.0.1:8000/v1)",
+    )
+    vlm.add_argument(
+        "--model",
+        default=os.environ.get("BOOKMIND_VLM_MODEL", "qwen3-vl"),
+        help="Model name for the VLM endpoint (default env BOOKMIND_VLM_MODEL or qwen3-vl)",
+    )
+    vlm.add_argument(
+        "--paddleocr_jsonl",
+        required=False,
+        help="Optional PaddleOCR JSONL for OCR hints",
+    )
+    vlm.add_argument(
+        "--use_ocr_hints",
+        default=True,
+        type=lambda v: str(v).lower() in {"1", "true", "yes", "y"},
+        help="Include OCR hints in the prompt (default true)",
+    )
+    vlm.set_defaults(func=_cmd_vlm)
 
     return parser
 

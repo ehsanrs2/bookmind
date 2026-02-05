@@ -156,3 +156,50 @@ Job JSONL schema:
   "prompt_template": "technical_diagram_v1"
 }
 ```
+
+## VLM caption runner (figure crops)
+
+Command example:
+```
+python tools/bookmind_bench/run.py vlm --jobs bench_runs/paddleocr/vlm_jobs.jsonl --out bench_runs --endpoint http://127.0.0.1:8000/v1 --model qwen3-vl
+```
+
+Optional OCR hints:
+```
+python tools/bookmind_bench/run.py vlm --jobs bench_runs/paddleocr/vlm_jobs.jsonl --out bench_runs --paddleocr_jsonl bench_runs/paddleocr/output.jsonl --use_ocr_hints true
+```
+
+Output location:
+```
+<out>/vlm/output.jsonl
+```
+
+Requirements:
+- Start a local OpenAI-compatible VLM endpoint (vLLM) before running `vlm`.
+- The endpoint must be reachable at `--endpoint` (default `http://127.0.0.1:8000/v1`).
+- No remote downloads are performed by the runner.
+
+Output schema (figure caption JSONL):
+```json
+{
+  "engine": "vlm",
+  "page": 1,
+  "type": "figure_caption",
+  "text": "Concise technical caption describing components and flow...",
+  "bbox": [x0, y0, x1, y1],
+  "timing_ms": 1234,
+  "meta": {
+    "pdf_page_start": 1,
+    "pdf_page_end": 1,
+    "prompt_template": "technical_diagram_v1",
+    "model": "qwen3-vl",
+    "job_index": 1,
+    "used_ocr_hints": true
+  }
+}
+```
+
+OCR hints behavior:
+- If `--paddleocr_jsonl` is provided and `--use_ocr_hints true`, the runner gathers `ocr_text` blocks
+  whose bbox intersects the figure bbox (IoU > 0.01).
+- Hints are truncated to keep prompts compact (default 800 chars, 30 items).
