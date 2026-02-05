@@ -65,12 +65,31 @@ variables to the local bundle paths.
 
 This enforces offline flags (HF/Transformers) and runs the CLI help commands.
 
+## Qwen3-VL (vLLM) workflow
+Online prefetch into the offline bundle:
+```bash
+BOOKMIND_QWEN3_VL_MODEL_ID=Qwen/Qwen3-VL-8B-Instruct \
+  ./tools/bookmind_bench/scripts/prefetch_online.sh --profile vlm
+```
+
+Start the server in offline mode (OpenAI-compatible):
+```bash
+./tools/bookmind_bench/scripts/start_vllm_qwen3vl.sh --offline \
+  --model tools/bookmind_bench/offline_bundle/models/qwen3_vl
+```
+
+Run the smoke test:
+```bash
+python tools/bookmind_bench/scripts/vlm_smoke_test.py \
+  --image /path/to/crop.png
+```
+
 ## Common pitfalls
 - **Dependency conflicts**: Keep bench dependencies isolated in the per-profile
   venvs to avoid Open WebUI runtime breakage and numpy/opencv/torch conflicts.
 - **Cache locations**: If models fail to load offline, confirm the env vars:
   - `XDG_CACHE_HOME` + `MARKER_CACHE_DIR` -> `offline_bundle/models/marker`
-  - `PADDLEOCR_HOME` + `PADDLE_HOME` -> `offline_bundle/models/paddleocr`
+  - `PADDLEOCR_HOME` + `PADDLE_HOME` + `HOME` -> `offline_bundle/models/paddleocr`
   - `HF_HOME` + `HF_HUB_CACHE` + `TRANSFORMERS_CACHE` -> `offline_bundle/models/qwen3_vl`
 - **GPU wheels**: `paddlepaddle-gpu` wheels are CUDA-specific; ensure the
   online machine downloads wheels compatible with the offline GPU stack.

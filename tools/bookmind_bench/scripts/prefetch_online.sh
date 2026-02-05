@@ -13,7 +13,7 @@ QWEN_DIR_DEFAULT="$MODEL_DIR/qwen3_vl"
 SAMPLE_PDF=""
 SAMPLE_IMAGE=""
 PROFILE="all"
-MODEL_ID_DEFAULT="Qwen/Qwen3-VL-4B-Instruct"
+MODEL_ID_DEFAULT="Qwen/Qwen3-VL-8B-Instruct"
 MODEL_ID="${BOOKMIND_QWEN3_VL_MODEL_ID:-$MODEL_ID_DEFAULT}"
 QWEN_DIR="${BOOKMIND_QWEN3_VL_DIR:-$QWEN_DIR_DEFAULT}"
 
@@ -114,6 +114,7 @@ if [[ " ${profiles[*]} " == *" ocr "* ]]; then
   mkdir -p "$PADDLE_DIR"
   export PADDLEOCR_HOME="$PADDLE_DIR"
   export PADDLE_HOME="$PADDLE_DIR"
+  export HOME="$PADDLE_DIR"
   export BOOKMIND_SAMPLE_IMAGE="$SAMPLE_IMAGE"
 
   python - <<'PY'
@@ -125,7 +126,8 @@ sample_image = os.environ.get("BOOKMIND_SAMPLE_IMAGE")
 try:
     from paddleocr import PPStructure
 except Exception as exc:
-    raise SystemExit(f"Unable to import PaddleOCR: {exc}")
+    print(f"Unable to import PaddleOCR for warmup: {exc}")
+    raise SystemExit(0)
 
 engine = PPStructure(show_log=False)
 

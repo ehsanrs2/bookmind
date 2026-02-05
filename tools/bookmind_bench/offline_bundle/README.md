@@ -11,11 +11,11 @@ Contents:
 
 Cache environment variables used by the scripts:
 - Marker: `XDG_CACHE_HOME` and `MARKER_CACHE_DIR` -> `models/marker/`
-- PaddleOCR: `PADDLEOCR_HOME` and `PADDLE_HOME` -> `models/paddleocr/`
+- PaddleOCR: `PADDLEOCR_HOME`, `PADDLE_HOME`, and `HOME` -> `models/paddleocr/`
 - Hugging Face: `HF_HOME`, `HF_HUB_CACHE`, and `TRANSFORMERS_CACHE` -> `models/qwen3_vl/`
 
 Qwen3-VL overrides:
-- `BOOKMIND_QWEN3_VL_MODEL_ID` selects the model ID (default is a 4B variant).
+- `BOOKMIND_QWEN3_VL_MODEL_ID` selects the model ID (default is an 8B variant).
 - `BOOKMIND_QWEN3_VL_DIR` sets the local snapshot directory.
 
 For air-gapped vLLM usage, point vLLM to the local model path:
