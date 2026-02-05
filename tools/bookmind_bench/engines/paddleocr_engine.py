@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 _PAGE_RE = re.compile(r"(?:page|pg|p)[_\- ]*(\d+)", re.IGNORECASE)
+FULLPAGE_FIGURE_AREA_RATIO = 0.80
+MIN_TEXT_CHARS = 2
+MAX_TEXT_BLOCKS_PER_PAGE = 500
 
 
 class _TableHTMLParser(HTMLParser):
@@ -106,6 +109,27 @@ def _normalize_bbox(bbox: Any) -> Optional[List[float]]:
             ys = [float(v[1]) for v in bbox]
             return [min(xs), min(ys), max(xs), max(ys)]
     return None
+
+
+def _bbox_area(bbox: Sequence[float]) -> float:
+    width = max(0.0, float(bbox[2]) - float(bbox[0]))
+    height = max(0.0, float(bbox[3]) - float(bbox[1]))
+    return width * height
+
+
+def _page_area(image_path: Path) -> Optional[float]:
+    try:
+        from PIL import Image
+    except Exception:
+        return None
+    try:
+        with Image.open(image_path) as image:
+            width, height = image.size
+    except Exception:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return float(width * height)
 
 
 def _extract_text_from_res(res: Any) -> str:
@@ -236,6 +260,86 @@ def _build_record(
     return record
 
 
+def _is_ocr_line(item: Any) -> bool:
+    if not isinstance(item, (list, tuple)) or len(item) < 2:
+        return False
+    if not isinstance(item[0], (list, tuple)):
+        return False
+    if not isinstance(item[1], (list, tuple)) or not item[1]:
+        return False
+    return True
+
+
+def _normalize_ocr_lines(ocr_result: Any) -> List[Any]:
+    if not isinstance(ocr_result, list):
+        return []
+    if ocr_result and all(_is_ocr_line(item) for item in ocr_result):
+        return ocr_result
+    if (
+        len(ocr_result) == 1
+        and isinstance(ocr_result[0], list)
+        and ocr_result[0]
+        and all(_is_ocr_line(item) for item in ocr_result[0])
+    ):
+        return ocr_result[0]
+    return []
+
+
+def _extract_ocr_text_blocks(
+    ocr_result: Any,
+) -> List[Tuple[List[float], str, Optional[float]]]:
+    blocks: List[Tuple[List[float], str, Optional[float]]] = []
+    for item in _normalize_ocr_lines(ocr_result):
+        points = item[0]
+        payload = item[1]
+        text = str(payload[0]).strip() if payload else ""
+        if not text or len(text) < MIN_TEXT_CHARS:
+            continue
+        confidence: Optional[float] = None
+        if len(payload) > 1 and isinstance(payload[1], (int, float)):
+            confidence = float(payload[1])
+        bbox = _normalize_bbox(points)
+        if bbox is None:
+            continue
+        blocks.append((bbox, text, confidence))
+        if MAX_TEXT_BLOCKS_PER_PAGE and len(blocks) >= MAX_TEXT_BLOCKS_PER_PAGE:
+            break
+    return blocks
+
+
+def _should_run_ocr_fallback(
+    result: Sequence[Dict[str, Any]],
+    image_path: Path,
+) -> bool:
+    text_like = {"text", "title", "list", "table", "equation"}
+    figure_items: List[Dict[str, Any]] = []
+    has_text_or_table = False
+    has_other = False
+
+    for item in result:
+        if not isinstance(item, dict):
+            continue
+        block_type = _normalize_block_type(str(item.get("type", "")))
+        if block_type == "figure":
+            figure_items.append(item)
+            continue
+        if block_type in text_like:
+            has_text_or_table = True
+        else:
+            has_other = True
+
+    if has_text_or_table or has_other or len(figure_items) != 1:
+        return False
+
+    bbox = _normalize_bbox(figure_items[0].get("bbox"))
+    if bbox is None:
+        return False
+    page_area = _page_area(image_path)
+    if page_area is None or page_area <= 0:
+        return False
+    return _bbox_area(bbox) / page_area >= FULLPAGE_FIGURE_AREA_RATIO
+
+
 def validate_paddleocr_record(record: Dict[str, Any]) -> None:
     if record.get("engine") != "paddleocr":
         raise ValueError("engine must be 'paddleocr'")
@@ -271,6 +375,20 @@ def validate_paddleocr_record(record: Dict[str, Any]) -> None:
             raise ValueError("bbox must be [x1, y1, x2, y2]")
 
 
+def _json_fallback(obj: Any) -> Any:
+    if hasattr(obj, "tolist"):
+        try:
+            return obj.tolist()
+        except Exception:
+            pass
+    if isinstance(obj, (bytes, bytearray)):
+        try:
+            return obj.decode("utf-8", errors="replace")
+        except Exception:
+            return str(obj)
+    return str(obj)
+
+
 def run_paddleocr(
     img_dir: str,
     pages: Optional[Sequence[int]],
@@ -287,7 +405,7 @@ def run_paddleocr(
         )
 
     try:
-        from paddleocr import PPStructure
+        from paddleocr import PPStructure, PaddleOCR
     except Exception as exc:
         raise SystemExit(f"Unable to import PaddleOCR: {exc}")
 
@@ -303,6 +421,7 @@ def run_paddleocr(
         raise SystemExit("No matching pages found in image directory.")
 
     engine = PPStructure(show_log=False, use_gpu=use_gpu, lang=lang)
+    ocr_engine: Optional[Any] = None
 
     records: List[Dict[str, Any]] = []
     debug_path: Optional[Path] = None
@@ -318,8 +437,11 @@ def run_paddleocr(
         timing_ms = int(round((time.perf_counter() - start) * 1000))
         if debug_path is not None:
             raw_path = debug_path / f"page_{page_num}.json"
-            raw_path.write_text(json.dumps(result, ensure_ascii=True, indent=2))
+            raw_path.write_text(
+                json.dumps(result, ensure_ascii=True, indent=2, default=_json_fallback)
+            )
 
+        page_records: List[Dict[str, Any]] = []
         for item in result:
             if not isinstance(item, dict):
                 continue
@@ -338,7 +460,7 @@ def run_paddleocr(
                     text = _table_tokens_to_markdown(res)
                 if not text:
                     text = "Table"
-                records.append(
+                page_records.append(
                     _build_record(
                         page=page_num,
                         record_type="table_md",
@@ -353,7 +475,7 @@ def run_paddleocr(
 
             text = _extract_text_from_res(res)
             if block_type == "figure":
-                records.append(
+                page_records.append(
                     _build_record(
                         page=page_num,
                         record_type="layout_block",
@@ -371,7 +493,7 @@ def run_paddleocr(
             else:
                 record_type = "layout_block"
                 text = ""
-            records.append(
+            page_records.append(
                 _build_record(
                     page=page_num,
                     record_type=record_type,
@@ -382,6 +504,39 @@ def run_paddleocr(
                     confidence=confidence,
                 )
             )
+
+        if _should_run_ocr_fallback(result, image_path):
+            if ocr_engine is None:
+                ocr_engine = PaddleOCR(
+                    show_log=False,
+                    use_gpu=use_gpu,
+                    lang=lang,
+                    det=True,
+                    rec=True,
+                )
+            ocr_start = time.perf_counter()
+            try:
+                ocr_result = ocr_engine.ocr(str(image_path), cls=False)
+            except Exception as exc:
+                raise SystemExit(f"PaddleOCR OCR fallback failed on {image_path}: {exc}")
+            ocr_timing_ms = int(round((time.perf_counter() - ocr_start) * 1000))
+            page_timing_ms = timing_ms + ocr_timing_ms
+            for record in page_records:
+                record["timing_ms"] = page_timing_ms
+            for bbox, text, confidence in _extract_ocr_text_blocks(ocr_result):
+                page_records.append(
+                    _build_record(
+                        page=page_num,
+                        record_type="ocr_text",
+                        text=text,
+                        bbox=bbox,
+                        timing_ms=page_timing_ms,
+                        block_type="text",
+                        confidence=confidence,
+                    )
+                )
+
+        records.extend(page_records)
 
     return records
 
@@ -401,7 +556,7 @@ def run_paddleocr_on_image(
         )
 
     try:
-        from paddleocr import PPStructure
+        from paddleocr import PPStructure, PaddleOCR
     except Exception as exc:
         raise SystemExit(f"Unable to import PaddleOCR: {exc}")
 
@@ -473,5 +628,35 @@ def run_paddleocr_on_image(
                 confidence=confidence,
             )
         )
+
+    if _should_run_ocr_fallback(result, Path(image_path)):
+        ocr_engine = PaddleOCR(
+            show_log=False,
+            use_gpu=use_gpu,
+            lang=lang,
+            det=True,
+            rec=True,
+        )
+        ocr_start = time.perf_counter()
+        try:
+            ocr_result = ocr_engine.ocr(image_path, cls=False)
+        except Exception as exc:
+            raise SystemExit(f"PaddleOCR OCR fallback failed on {image_path}: {exc}")
+        ocr_timing_ms = int(round((time.perf_counter() - ocr_start) * 1000))
+        page_timing_ms = timing_ms + ocr_timing_ms
+        for record in records:
+            record["timing_ms"] = page_timing_ms
+        for bbox, text, confidence in _extract_ocr_text_blocks(ocr_result):
+            records.append(
+                _build_record(
+                    page=1,
+                    record_type="ocr_text",
+                    text=text,
+                    bbox=bbox,
+                    timing_ms=page_timing_ms,
+                    block_type="text",
+                    confidence=confidence,
+                )
+            )
 
     return records
