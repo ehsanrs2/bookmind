@@ -265,14 +265,25 @@ def _is_ocr_line(item: Any) -> bool:
         return False
     if not isinstance(item[0], (list, tuple)):
         return False
+    if _normalize_bbox(item[0]) is None:
+        return False
     if not isinstance(item[1], (list, tuple)) or not item[1]:
         return False
     return True
 
 
-def _normalize_ocr_lines(ocr_result: Any) -> List[Any]:
-    if not isinstance(ocr_result, list):
-        return []
+def _is_ocr_points(points: Any) -> bool:
+    if not isinstance(points, (list, tuple)) or len(points) != 4:
+        return False
+    return all(
+        isinstance(point, (list, tuple))
+        and len(point) == 2
+        and all(isinstance(v, (int, float)) for v in point)
+        for point in points
+    )
+
+
+def _normalize_ocr_lines_from_list(ocr_result: List[Any]) -> List[Any]:
     if ocr_result and all(_is_ocr_line(item) for item in ocr_result):
         return ocr_result
     if (
@@ -282,6 +293,77 @@ def _normalize_ocr_lines(ocr_result: Any) -> List[Any]:
         and all(_is_ocr_line(item) for item in ocr_result[0])
     ):
         return ocr_result[0]
+    if (
+        len(ocr_result) == 1
+        and isinstance(ocr_result[0], list)
+        and ocr_result[0]
+        and all(isinstance(item, (list, tuple)) and len(item) >= 2 for item in ocr_result[0])
+    ):
+        return ocr_result[0]
+    return []
+
+
+def _normalize_ocr_from_dict(ocr_result: Dict[str, Any]) -> List[Any]:
+    def _maybe_list(value: Any) -> Any:
+        if hasattr(value, "tolist"):
+            try:
+                return value.tolist()
+            except Exception:
+                return value
+        return value
+
+    if "boxes" in ocr_result and "texts" in ocr_result:
+        boxes = _maybe_list(ocr_result.get("boxes") or [])
+        texts = ocr_result.get("texts") or []
+        scores = ocr_result.get("scores") or ocr_result.get("confidences") or []
+        lines: List[Any] = []
+        for idx, box in enumerate(boxes):
+            text = texts[idx] if idx < len(texts) else ""
+            score = scores[idx] if idx < len(scores) else None
+            lines.append([box, (text, score)])
+        return lines
+    if "dt_boxes" in ocr_result and "rec_res" in ocr_result:
+        boxes = _maybe_list(ocr_result.get("dt_boxes") or [])
+        rec_res = ocr_result.get("rec_res") or []
+        lines = []
+        for idx, box in enumerate(boxes):
+            text = ""
+            score = None
+            if idx < len(rec_res):
+                entry = rec_res[idx]
+                if isinstance(entry, (list, tuple)) and entry:
+                    text = entry[0]
+                    if len(entry) > 1:
+                        score = entry[1]
+                elif isinstance(entry, dict):
+                    text = entry.get("text", "")
+                    score = entry.get("confidence")
+            lines.append([box, (text, score)])
+        return lines
+    if "result" in ocr_result and isinstance(ocr_result["result"], list):
+        return _normalize_ocr_lines(ocr_result["result"])
+    return []
+
+
+def _normalize_ocr_lines(ocr_result: Any) -> List[Any]:
+    if isinstance(ocr_result, dict):
+        return _normalize_ocr_from_dict(ocr_result)
+    if isinstance(ocr_result, list):
+        lines = _normalize_ocr_lines_from_list(ocr_result)
+        if lines:
+            return lines
+        if ocr_result and all(isinstance(item, dict) for item in ocr_result):
+            lines = []
+            for item in ocr_result:
+                if "bbox" in item and "text" in item:
+                    lines.append(
+                        [
+                            item["bbox"],
+                            (item.get("text"), item.get("confidence")),
+                        ]
+                    )
+            if lines:
+                return lines
     return []
 
 
@@ -311,6 +393,60 @@ def _extract_ocr_text_blocks(
         capped = len(blocks) - MAX_TEXT_BLOCKS_PER_PAGE
         blocks = blocks[:MAX_TEXT_BLOCKS_PER_PAGE]
     return blocks, raw_count, short_filtered, capped
+
+
+def _ocr_summary(ocr_result: Any) -> str:
+    parts: List[str] = [f"type={type(ocr_result).__name__}"]
+    if isinstance(ocr_result, dict):
+        parts.append(f"keys={list(ocr_result.keys())}")
+    if isinstance(ocr_result, (list, tuple, dict)):
+        try:
+            parts.append(f"len={len(ocr_result)}")
+        except Exception:
+            pass
+    preview_items: List[Any] = []
+    if isinstance(ocr_result, list):
+        preview_items = ocr_result[:2]
+    elif isinstance(ocr_result, dict):
+        preview_items = list(ocr_result.values())[:2]
+    preview_chunks = []
+    for item in preview_items:
+        if isinstance(item, (list, tuple)):
+            preview_chunks.append(
+                f"{type(item).__name__}({len(item)})"
+            )
+        elif isinstance(item, dict):
+            preview_chunks.append(f"dict(keys={list(item.keys())})")
+        else:
+            preview_chunks.append(type(item).__name__)
+    if preview_chunks:
+        parts.append(f"preview={preview_chunks}")
+    return " ".join(parts)
+
+
+def _json_safe_ocr_debug(ocr_result: Any) -> Dict[str, Any]:
+    return {
+        "type": type(ocr_result).__name__,
+        "summary": _ocr_summary(ocr_result),
+        "repr": repr(ocr_result)[:1000],
+    }
+
+
+def _build_parse_failed_record(
+    page: int,
+    timing_ms: int,
+) -> Dict[str, Any]:
+    record = _build_record(
+        page=page,
+        record_type="ocr_text",
+        text="OCR_FALLBACK_PARSE_FAILED",
+        bbox=None,
+        timing_ms=timing_ms,
+        block_type="text",
+        confidence=None,
+    )
+    record["meta"]["parse_failed"] = True
+    return record
 
 
 def _count_block_types(result: Sequence[Dict[str, Any]]) -> Dict[str, int]:
@@ -562,6 +698,8 @@ def run_paddleocr(
                 ocr_result = ocr_engine.ocr(str(image_path), cls=False)
             except Exception as exc:
                 raise SystemExit(f"PaddleOCR OCR fallback failed on {image_path}: {exc}")
+            if verbose:
+                print(f"PaddleOCR page {page_num}: ocr_raw_summary {_ocr_summary(ocr_result)}")
             ocr_timing_ms = int(round((time.perf_counter() - ocr_start) * 1000))
             page_timing_ms = timing_ms + ocr_timing_ms
             if ocr_debug_path is not None:
@@ -576,7 +714,13 @@ def run_paddleocr(
                         )
                     )
                 except Exception:
-                    pass
+                    raw_path.write_text(
+                        json.dumps(
+                            _json_safe_ocr_debug(ocr_result),
+                            ensure_ascii=True,
+                            indent=2,
+                        )
+                    )
             for record in page_records:
                 record["timing_ms"] = page_timing_ms
             (
@@ -593,6 +737,8 @@ def run_paddleocr(
                     f"capped={ocr_capped} "
                     f"emitted={len(ocr_blocks)}"
                 )
+            if not ocr_blocks:
+                page_records.append(_build_parse_failed_record(page_num, page_timing_ms))
             for bbox, text, confidence in ocr_blocks:
                 page_records.append(
                     _build_record(
@@ -729,6 +875,8 @@ def run_paddleocr_on_image(
             ocr_result = ocr_engine.ocr(image_path, cls=False)
         except Exception as exc:
             raise SystemExit(f"PaddleOCR OCR fallback failed on {image_path}: {exc}")
+        if verbose:
+            print(f"PaddleOCR page 1: ocr_raw_summary {_ocr_summary(ocr_result)}")
         ocr_timing_ms = int(round((time.perf_counter() - ocr_start) * 1000))
         page_timing_ms = timing_ms + ocr_timing_ms
         if ocr_debug_path is not None:
@@ -743,7 +891,13 @@ def run_paddleocr_on_image(
                     )
                 )
             except Exception:
-                pass
+                raw_path.write_text(
+                    json.dumps(
+                        _json_safe_ocr_debug(ocr_result),
+                        ensure_ascii=True,
+                        indent=2,
+                    )
+                )
         for record in records:
             record["timing_ms"] = page_timing_ms
         (
@@ -760,6 +914,8 @@ def run_paddleocr_on_image(
                 f"capped={ocr_capped} "
                 f"emitted={len(ocr_blocks)}"
             )
+        if not ocr_blocks:
+            records.append(_build_parse_failed_record(1, page_timing_ms))
         for bbox, text, confidence in ocr_blocks:
             records.append(
                 _build_record(

@@ -186,3 +186,95 @@ def test_paddleocr_force_fallback_even_with_text(monkeypatch, tmp_path):
         force_ocr_fallback=True,
     )
     assert any(record.get("text") == "Forced" for record in records)
+
+
+def test_paddleocr_fallback_parses_format_a(monkeypatch, tmp_path):
+    img_dir = tmp_path / "images"
+    img_dir.mkdir()
+    image_path = img_dir / "page_1.png"
+    image_path.write_bytes(b"fake")
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    (cache_dir / "dummy").write_text("x")
+
+    monkeypatch.setattr(paddleocr_engine, "_page_area", lambda _: 1000.0)
+
+    class FakePPStructure:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __call__(self, image_path_str):
+            return [{"type": "figure", "bbox": [0, 0, 10, 10]}]
+
+    class FakePaddleOCR:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def ocr(self, image_path_str, cls=False):
+            return [
+                [
+                    [[[0, 0], [50, 0], [50, 10], [0, 10]], ("LineA", 0.9)],
+                    [[[0, 20], [50, 20], [50, 30], [0, 30]], ("LineB", 0.8)],
+                ]
+            ]
+
+    fake_module = types.SimpleNamespace(PPStructure=FakePPStructure, PaddleOCR=FakePaddleOCR)
+    monkeypatch.setitem(sys.modules, "paddleocr", fake_module)
+
+    records = paddleocr_engine.run_paddleocr(
+        img_dir=str(img_dir),
+        pages=None,
+        lang="en",
+        use_gpu=False,
+        cache_dir=str(cache_dir),
+    )
+    ocr_blocks = [record for record in records if record["type"] == "ocr_text"]
+    assert len(ocr_blocks) >= 2
+    assert all(record.get("bbox") for record in ocr_blocks)
+
+
+def test_paddleocr_fallback_parses_format_b(monkeypatch, tmp_path):
+    img_dir = tmp_path / "images"
+    img_dir.mkdir()
+    image_path = img_dir / "page_1.png"
+    image_path.write_bytes(b"fake")
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    (cache_dir / "dummy").write_text("x")
+
+    monkeypatch.setattr(paddleocr_engine, "_page_area", lambda _: 1000.0)
+
+    class FakePPStructure:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __call__(self, image_path_str):
+            return [{"type": "figure", "bbox": [0, 0, 10, 10]}]
+
+    class FakePaddleOCR:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def ocr(self, image_path_str, cls=False):
+            return [
+                (
+                    [[0, 0], [50, 0], [50, 10], [0, 10]],
+                    ("TupleLine", 0.95),
+                )
+            ]
+
+    fake_module = types.SimpleNamespace(PPStructure=FakePPStructure, PaddleOCR=FakePaddleOCR)
+    monkeypatch.setitem(sys.modules, "paddleocr", fake_module)
+
+    records = paddleocr_engine.run_paddleocr(
+        img_dir=str(img_dir),
+        pages=None,
+        lang="en",
+        use_gpu=False,
+        cache_dir=str(cache_dir),
+    )
+    ocr_blocks = [record for record in records if record["type"] == "ocr_text"]
+    assert len(ocr_blocks) >= 1
+    assert any(record.get("text") == "TupleLine" for record in ocr_blocks)
