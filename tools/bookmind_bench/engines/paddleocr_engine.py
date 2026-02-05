@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
@@ -88,6 +89,7 @@ def _configure_cache_dir(cache_dir: Optional[str]) -> Optional[Path]:
     path = _ensure_cache_dir(cache_dir)
     os.environ["PADDLEOCR_HOME"] = str(path)
     os.environ["PADDLE_HOME"] = str(path)
+    os.environ["HOME"] = str(path)
     return path
 
 
@@ -169,6 +171,42 @@ def _html_table_to_markdown(html: str) -> str:
     return "\n".join(lines)
 
 
+def _table_tokens_to_markdown(res: Any) -> str:
+    if not isinstance(res, list):
+        return ""
+    texts: List[str] = []
+    for item in res:
+        if isinstance(item, dict) and item.get("text"):
+            texts.append(str(item["text"]).strip())
+        elif isinstance(item, str):
+            texts.append(item.strip())
+    texts = [t for t in texts if t]
+    if not texts:
+        return ""
+    lines = [
+        "| Cell |",
+        "| --- |",
+    ]
+    for text in texts:
+        lines.append(f"| {text} |")
+    return "\n".join(lines)
+
+
+def _normalize_block_type(raw_type: str) -> str:
+    block_type = raw_type.strip().lower()
+    if not block_type:
+        return "unknown"
+    mapping = {
+        "text": "text",
+        "title": "title",
+        "list": "list",
+        "table": "table",
+        "figure": "figure",
+        "equation": "equation",
+    }
+    return mapping.get(block_type, "unknown")
+
+
 def _build_record(
     page: int,
     record_type: str,
@@ -203,16 +241,24 @@ def validate_paddleocr_record(record: Dict[str, Any]) -> None:
         raise ValueError("engine must be 'paddleocr'")
     if not isinstance(record.get("page"), int) or record["page"] < 1:
         raise ValueError("page must be a positive int")
-    if record.get("type") not in {"ocr_text", "table_md", "layout_block"}:
+    record_type = record.get("type")
+    if record_type not in {"ocr_text", "table_md", "layout_block"}:
         raise ValueError("type must be ocr_text, table_md, or layout_block")
     if "text" not in record:
         raise ValueError("text is required")
+    if record_type == "table_md" and not str(record.get("text", "")).strip():
+        raise ValueError("table_md records must include text")
     meta = record.get("meta")
     if not isinstance(meta, dict):
         raise ValueError("meta must be a dict")
     for key in ("pdf_page_start", "pdf_page_end"):
         if key not in meta:
             raise ValueError(f"meta.{key} is required")
+    if record_type == "layout_block":
+        if "bbox" not in record or record["bbox"] is None:
+            raise ValueError("layout_block records must include bbox")
+        if not meta.get("block_type"):
+            raise ValueError("layout_block records must include meta.block_type")
     if "timing_ms" not in record:
         raise ValueError("timing_ms is required")
     if "bbox" in record and record["bbox"] is not None:
@@ -231,6 +277,7 @@ def run_paddleocr(
     lang: str,
     use_gpu: bool,
     cache_dir: Optional[str],
+    debug_dir: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     cache_path = _configure_cache_dir(cache_dir)
     if cache_path is None:
@@ -258,6 +305,10 @@ def run_paddleocr(
     engine = PPStructure(show_log=False, use_gpu=use_gpu, lang=lang)
 
     records: List[Dict[str, Any]] = []
+    debug_path: Optional[Path] = None
+    if debug_dir:
+        debug_path = Path(debug_dir) / "paddleocr_raw"
+        debug_path.mkdir(parents=True, exist_ok=True)
     for page_num, image_path in images:
         start = time.perf_counter()
         try:
@@ -265,11 +316,14 @@ def run_paddleocr(
         except Exception as exc:
             raise SystemExit(f"PaddleOCR failed on {image_path}: {exc}")
         timing_ms = int(round((time.perf_counter() - start) * 1000))
+        if debug_path is not None:
+            raw_path = debug_path / f"page_{page_num}.json"
+            raw_path.write_text(json.dumps(result, ensure_ascii=True, indent=2))
 
         for item in result:
             if not isinstance(item, dict):
                 continue
-            block_type = str(item.get("type", "")).lower()
+            block_type = _normalize_block_type(str(item.get("type", "")))
             bbox = _normalize_bbox(item.get("bbox"))
             res = item.get("res")
             confidence = _extract_confidence(res, item.get("confidence"))
@@ -278,7 +332,12 @@ def run_paddleocr(
                 html = ""
                 if isinstance(res, dict) and res.get("html"):
                     html = str(res["html"])
-                text = _html_table_to_markdown(html) if html else ""
+                if html:
+                    text = _html_table_to_markdown(html)
+                else:
+                    text = _table_tokens_to_markdown(res)
+                if not text:
+                    text = "Table"
                 records.append(
                     _build_record(
                         page=page_num,
@@ -293,19 +352,7 @@ def run_paddleocr(
                 continue
 
             text = _extract_text_from_res(res)
-            if text:
-                records.append(
-                    _build_record(
-                        page=page_num,
-                        record_type="ocr_text",
-                        text=text,
-                        bbox=bbox,
-                        timing_ms=timing_ms,
-                        block_type=block_type or "text",
-                        confidence=confidence,
-                    )
-                )
-            else:
+            if block_type == "figure":
                 records.append(
                     _build_record(
                         page=page_num,
@@ -313,10 +360,28 @@ def run_paddleocr(
                         text="",
                         bbox=bbox,
                         timing_ms=timing_ms,
-                        block_type=block_type or "layout",
+                        block_type=block_type,
                         confidence=confidence,
                     )
                 )
+                continue
+
+            if text:
+                record_type = "ocr_text"
+            else:
+                record_type = "layout_block"
+                text = ""
+            records.append(
+                _build_record(
+                    page=page_num,
+                    record_type=record_type,
+                    text=text,
+                    bbox=bbox,
+                    timing_ms=timing_ms,
+                    block_type=block_type,
+                    confidence=confidence,
+                )
+            )
 
     return records
 
@@ -349,7 +414,7 @@ def run_paddleocr_on_image(
     for item in result:
         if not isinstance(item, dict):
             continue
-        block_type = str(item.get("type", "")).lower()
+        block_type = _normalize_block_type(str(item.get("type", "")))
         bbox = _normalize_bbox(item.get("bbox"))
         res = item.get("res")
         confidence = _extract_confidence(res, item.get("confidence"))
@@ -358,7 +423,12 @@ def run_paddleocr_on_image(
             html = ""
             if isinstance(res, dict) and res.get("html"):
                 html = str(res["html"])
-            text = _html_table_to_markdown(html) if html else ""
+            if html:
+                text = _html_table_to_markdown(html)
+            else:
+                text = _table_tokens_to_markdown(res)
+            if not text:
+                text = "Table"
             records.append(
                 _build_record(
                     page=1,
@@ -373,19 +443,7 @@ def run_paddleocr_on_image(
             continue
 
         text = _extract_text_from_res(res)
-        if text:
-            records.append(
-                _build_record(
-                    page=1,
-                    record_type="ocr_text",
-                    text=text,
-                    bbox=bbox,
-                    timing_ms=timing_ms,
-                    block_type=block_type or "text",
-                    confidence=confidence,
-                )
-            )
-        else:
+        if block_type == "figure":
             records.append(
                 _build_record(
                     page=1,
@@ -393,9 +451,27 @@ def run_paddleocr_on_image(
                     text="",
                     bbox=bbox,
                     timing_ms=timing_ms,
-                    block_type=block_type or "layout",
+                    block_type=block_type,
                     confidence=confidence,
                 )
             )
+            continue
+
+        if text:
+            record_type = "ocr_text"
+        else:
+            record_type = "layout_block"
+            text = ""
+        records.append(
+            _build_record(
+                page=1,
+                record_type=record_type,
+                text=text,
+                bbox=bbox,
+                timing_ms=timing_ms,
+                block_type=block_type,
+                confidence=confidence,
+            )
+        )
 
     return records

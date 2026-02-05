@@ -13,6 +13,7 @@ from engines.paddleocr_engine import (
     run_paddleocr,
     run_paddleocr_on_image,
 )
+from engines.vlm_hook import plan_vlm_jobs
 from render_pdf import parse_pages, render_pdf_pages
 
 
@@ -134,11 +135,38 @@ def _cmd_paddleocr(args: argparse.Namespace) -> int:
         lang=args.lang,
         use_gpu=args.use_gpu,
         cache_dir=cache_dir,
+        debug_dir=args.debug_dir,
     )
 
     output_path = out_dir / "paddleocr" / "output.jsonl"
     write_jsonl(output_path, records)
     print(f"PaddleOCR wrote {len(records)} block(s) to {output_path}")
+    return 0
+
+
+def _cmd_plan_vlm(args: argparse.Namespace) -> int:
+    paddleocr_jsonl = Path(args.paddleocr_jsonl)
+    img_dir = Path(args.imgdir)
+    out_path: Path
+    if args.out:
+        out_path = Path(args.out)
+    else:
+        if paddleocr_jsonl.name == "output.jsonl" and paddleocr_jsonl.parent.name == "paddleocr":
+            out_path = paddleocr_jsonl.parent / "vlm_jobs.jsonl"
+        else:
+            raise SystemExit("Provide --out for plan-vlm when output path cannot be inferred.")
+
+    if not paddleocr_jsonl.exists():
+        raise SystemExit(f"PaddleOCR JSONL not found: {paddleocr_jsonl}")
+    if not img_dir.exists():
+        raise SystemExit(f"Image directory not found: {img_dir}")
+
+    job_count = plan_vlm_jobs(
+        records_jsonl_path=str(paddleocr_jsonl),
+        imgdir=str(img_dir),
+        out_jobs_path=str(out_path),
+    )
+    print(f"Planned {job_count} VLM job(s) to {out_path}")
     return 0
 
 
@@ -208,6 +236,11 @@ def build_parser() -> argparse.ArgumentParser:
         required=False,
         help="Override PaddleOCR cache dir (defaults to offline bundle if present)",
     )
+    paddleocr.add_argument(
+        "--debug_dir",
+        required=False,
+        help="Optional directory to write raw PP-Structure JSON per page",
+    )
     paddleocr.set_defaults(func=_cmd_paddleocr)
 
     paddleocr_smoke = subparsers.add_parser(
@@ -227,6 +260,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override PaddleOCR cache dir (defaults to offline bundle if present)",
     )
     paddleocr_smoke.set_defaults(func=_cmd_paddleocr_smoke)
+
+    plan_vlm = subparsers.add_parser(
+        "plan-vlm", help="Plan VLM captioning jobs for figure regions"
+    )
+    plan_vlm.add_argument(
+        "--paddleocr_jsonl",
+        required=True,
+        help="Path to PaddleOCR output.jsonl",
+    )
+    plan_vlm.add_argument("--imgdir", required=True, help="Directory of PNG pages")
+    plan_vlm.add_argument(
+        "--out",
+        required=False,
+        help="Output path for VLM job JSONL (defaults to <out>/paddleocr/vlm_jobs.jsonl)",
+    )
+    plan_vlm.set_defaults(func=_cmd_plan_vlm)
 
     return parser
 

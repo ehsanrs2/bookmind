@@ -100,7 +100,50 @@ Output location:
 <out>/paddleocr/output.jsonl
 ```
 
+Output schema (multi-block JSONL):
+- Each line is a region-level record with `engine="paddleocr"`.
+- `page` is 1-based, `bbox` is `[x0, y0, x1, y1]` in pixel space.
+- `type` values:
+  - `ocr_text`: text-like regions, `text` contains region-specific OCR.
+  - `table_md`: table regions, `text` contains Markdown (best-effort).
+  - `layout_block`: non-text regions (e.g. figures), `text` is empty or brief.
+- `meta.block_type` is normalized to one of:
+  - `text`, `title`, `list`, `table`, `figure`, `equation`, `unknown`.
+- `meta.confidence` is optional.
+- `timing_ms` is the per-page processing time (same for all records in that page).
+
+Figure handling:
+- Figures are emitted as `layout_block` with `meta.block_type="figure"`.
+- Text labels inside figures should appear as separate `ocr_text` blocks if detected by PP-Structure.
+
+Debug raw output:
+- If `--debug_dir` is set, raw PP-Structure JSON is written to:
+  `<debug_dir>/paddleocr_raw/page_<N>.json`.
+
 Offline cache behavior:
 - Runtime downloads are disabled. Ensure `tools/bookmind_bench/offline_bundle/models/paddleocr`
   is populated via `scripts/prefetch_online.sh`.
 - You can override the cache directory with `BOOKMIND_PADDLEOCR_CACHE_DIR` or `--cache_dir`.
+
+## VLM planning hook (figure captioning)
+
+Command example:
+```
+python tools/bookmind_bench/run.py plan-vlm --paddleocr_jsonl bench_runs/paddleocr/output.jsonl --imgdir bench_runs/images
+```
+
+Output location (default when PaddleOCR output path is standard):
+```
+<out>/paddleocr/vlm_jobs.jsonl
+```
+
+Job JSONL schema:
+```json
+{
+  "page": 1,
+  "bbox": [x0, y0, x1, y1],
+  "image_path": "bench_runs/images/page_0001.png",
+  "suggested_crop_path": "bench_runs/paddleocr/vlm_crops/page_0001_block_001.png",
+  "prompt_template": "technical_diagram_v1"
+}
+```
