@@ -315,3 +315,4 @@ cypress/screenshots
 tools/bookmind_bench/offline_bundle/*
 !tools/bookmind_bench/offline_bundle/README.md
 .venv_bookmind_bench/
+.venv_bookmind_bench_*/
