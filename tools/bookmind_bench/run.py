@@ -136,6 +136,8 @@ def _cmd_paddleocr(args: argparse.Namespace) -> int:
         use_gpu=args.use_gpu,
         cache_dir=cache_dir,
         debug_dir=args.debug_dir,
+        verbose=args.verbose,
+        force_ocr_fallback=args.force_ocr_fallback,
     )
 
     output_path = out_dir / "paddleocr" / "output.jsonl"
@@ -240,6 +242,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--debug_dir",
         required=False,
         help="Optional directory to write raw PP-Structure JSON per page",
+    )
+    paddleocr.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Verbose per-page logging for PaddleOCR",
+    )
+    paddleocr.add_argument(
+        "--force_ocr_fallback",
+        action="store_true",
+        help="Always run OCR-only fallback (det+rec) per page",
     )
     paddleocr.set_defaults(func=_cmd_paddleocr)
 

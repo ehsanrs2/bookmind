@@ -115,15 +115,19 @@ Output schema (multi-block JSONL):
 Figure handling:
 - Figures are emitted as `layout_block` with `meta.block_type="figure"`.
 - Text labels inside figures should appear as separate `ocr_text` blocks if detected by PP-Structure.
-- Fallback for scanned manuals: if PP-Structure returns only a single figure region covering >= 80% of the page
-  and no text/table regions, an OCR-only pass runs to emit multiple `ocr_text` blocks. The original figure block
-  is still emitted so VLM cropping/captioning can proceed.
+- Fallback for scanned manuals: if PP-Structure returns no usable text or table regions, an OCR-only pass runs to
+  emit multiple `ocr_text` blocks. The original figure block is still emitted so VLM cropping/captioning can
+  proceed. A secondary heuristic triggers fallback when PP-Structure returns a single figure region covering
+  >= 80% of the page.
 - Knobs (constants in `paddleocr_engine.py`): `FULLPAGE_FIGURE_AREA_RATIO` (default 0.80),
   `MIN_TEXT_CHARS` (default 2), `MAX_TEXT_BLOCKS_PER_PAGE` (default 500).
+- CLI flags: `--verbose` prints per-page diagnostics, `--force_ocr_fallback` always runs OCR-only fallback.
 
 Debug raw output:
 - If `--debug_dir` is set, raw PP-Structure JSON is written to:
   `<debug_dir>/paddleocr_raw/page_<N>.json`.
+- OCR fallback raw output (when triggered) is written to:
+  `<debug_dir>/paddleocr_ocr_raw/page_<N>.json`.
 
 Offline cache behavior:
 - Runtime downloads are disabled. Ensure `tools/bookmind_bench/offline_bundle/models/paddleocr`

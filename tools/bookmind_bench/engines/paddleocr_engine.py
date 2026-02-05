@@ -287,13 +287,17 @@ def _normalize_ocr_lines(ocr_result: Any) -> List[Any]:
 
 def _extract_ocr_text_blocks(
     ocr_result: Any,
-) -> List[Tuple[List[float], str, Optional[float]]]:
+) -> Tuple[List[Tuple[List[float], str, Optional[float]]], int, int, int]:
     blocks: List[Tuple[List[float], str, Optional[float]]] = []
-    for item in _normalize_ocr_lines(ocr_result):
+    short_filtered = 0
+    lines = _normalize_ocr_lines(ocr_result)
+    raw_count = len(lines)
+    for item in lines:
         points = item[0]
         payload = item[1]
         text = str(payload[0]).strip() if payload else ""
         if not text or len(text) < MIN_TEXT_CHARS:
+            short_filtered += 1
             continue
         confidence: Optional[float] = None
         if len(payload) > 1 and isinstance(payload[1], (int, float)):
@@ -302,42 +306,66 @@ def _extract_ocr_text_blocks(
         if bbox is None:
             continue
         blocks.append((bbox, text, confidence))
-        if MAX_TEXT_BLOCKS_PER_PAGE and len(blocks) >= MAX_TEXT_BLOCKS_PER_PAGE:
-            break
-    return blocks
+    capped = 0
+    if MAX_TEXT_BLOCKS_PER_PAGE and len(blocks) > MAX_TEXT_BLOCKS_PER_PAGE:
+        capped = len(blocks) - MAX_TEXT_BLOCKS_PER_PAGE
+        blocks = blocks[:MAX_TEXT_BLOCKS_PER_PAGE]
+    return blocks, raw_count, short_filtered, capped
+
+
+def _count_block_types(result: Sequence[Dict[str, Any]]) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for item in result:
+        if not isinstance(item, dict):
+            continue
+        block_type = _normalize_block_type(str(item.get("type", "")))
+        counts[block_type] = counts.get(block_type, 0) + 1
+    return counts
+
+
+def _figure_fullpage_ratio(
+    result: Sequence[Dict[str, Any]],
+    image_path: Path,
+) -> Optional[float]:
+    figure_items = [
+        item
+        for item in result
+        if isinstance(item, dict)
+        and _normalize_block_type(str(item.get("type", ""))) == "figure"
+    ]
+    if len(figure_items) != 1:
+        return None
+    bbox = _normalize_bbox(figure_items[0].get("bbox"))
+    if bbox is None:
+        return None
+    page_area = _page_area(image_path)
+    if page_area is None or page_area <= 0:
+        return None
+    return _bbox_area(bbox) / page_area
 
 
 def _should_run_ocr_fallback(
     result: Sequence[Dict[str, Any]],
     image_path: Path,
-) -> bool:
-    text_like = {"text", "title", "list", "table", "equation"}
-    figure_items: List[Dict[str, Any]] = []
-    has_text_or_table = False
-    has_other = False
+    force: bool = False,
+) -> Tuple[bool, str, Dict[str, int]]:
+    counts = _count_block_types(result)
+    text_like_count = sum(
+        counts.get(block, 0) for block in ("text", "title", "list", "equation")
+    )
+    table_count = counts.get("table", 0)
+    no_text_or_table = text_like_count == 0 and table_count == 0
 
-    for item in result:
-        if not isinstance(item, dict):
-            continue
-        block_type = _normalize_block_type(str(item.get("type", "")))
-        if block_type == "figure":
-            figure_items.append(item)
-            continue
-        if block_type in text_like:
-            has_text_or_table = True
-        else:
-            has_other = True
+    if force:
+        return True, "forced", counts
+    if no_text_or_table:
+        return True, "no_text_or_table", counts
 
-    if has_text_or_table or has_other or len(figure_items) != 1:
-        return False
+    ratio = _figure_fullpage_ratio(result, image_path)
+    if ratio is not None and ratio >= FULLPAGE_FIGURE_AREA_RATIO:
+        return True, "fullpage_figure", counts
 
-    bbox = _normalize_bbox(figure_items[0].get("bbox"))
-    if bbox is None:
-        return False
-    page_area = _page_area(image_path)
-    if page_area is None or page_area <= 0:
-        return False
-    return _bbox_area(bbox) / page_area >= FULLPAGE_FIGURE_AREA_RATIO
+    return False, "has_text_or_table", counts
 
 
 def validate_paddleocr_record(record: Dict[str, Any]) -> None:
@@ -396,6 +424,8 @@ def run_paddleocr(
     use_gpu: bool,
     cache_dir: Optional[str],
     debug_dir: Optional[str] = None,
+    verbose: bool = False,
+    force_ocr_fallback: bool = False,
 ) -> List[Dict[str, Any]]:
     cache_path = _configure_cache_dir(cache_dir)
     if cache_path is None:
@@ -425,9 +455,12 @@ def run_paddleocr(
 
     records: List[Dict[str, Any]] = []
     debug_path: Optional[Path] = None
+    ocr_debug_path: Optional[Path] = None
     if debug_dir:
         debug_path = Path(debug_dir) / "paddleocr_raw"
         debug_path.mkdir(parents=True, exist_ok=True)
+        ocr_debug_path = Path(debug_dir) / "paddleocr_ocr_raw"
+        ocr_debug_path.mkdir(parents=True, exist_ok=True)
     for page_num, image_path in images:
         start = time.perf_counter()
         try:
@@ -505,7 +538,17 @@ def run_paddleocr(
                 )
             )
 
-        if _should_run_ocr_fallback(result, image_path):
+        run_fallback, reason, counts = _should_run_ocr_fallback(
+            result,
+            image_path,
+            force=force_ocr_fallback,
+        )
+        if verbose:
+            print(
+                "PaddleOCR page "
+                f"{page_num}: counts={counts} fallback={run_fallback} reason={reason}"
+            )
+        if run_fallback:
             if ocr_engine is None:
                 ocr_engine = PaddleOCR(
                     show_log=False,
@@ -521,9 +564,36 @@ def run_paddleocr(
                 raise SystemExit(f"PaddleOCR OCR fallback failed on {image_path}: {exc}")
             ocr_timing_ms = int(round((time.perf_counter() - ocr_start) * 1000))
             page_timing_ms = timing_ms + ocr_timing_ms
+            if ocr_debug_path is not None:
+                raw_path = ocr_debug_path / f"page_{page_num}.json"
+                try:
+                    raw_path.write_text(
+                        json.dumps(
+                            ocr_result,
+                            ensure_ascii=True,
+                            indent=2,
+                            default=_json_fallback,
+                        )
+                    )
+                except Exception:
+                    pass
             for record in page_records:
                 record["timing_ms"] = page_timing_ms
-            for bbox, text, confidence in _extract_ocr_text_blocks(ocr_result):
+            (
+                ocr_blocks,
+                ocr_raw_count,
+                ocr_short_filtered,
+                ocr_capped,
+            ) = _extract_ocr_text_blocks(ocr_result)
+            if verbose:
+                print(
+                    "PaddleOCR page "
+                    f"{page_num}: ocr_raw={ocr_raw_count} "
+                    f"filtered_short={ocr_short_filtered} "
+                    f"capped={ocr_capped} "
+                    f"emitted={len(ocr_blocks)}"
+                )
+            for bbox, text, confidence in ocr_blocks:
                 page_records.append(
                     _build_record(
                         page=page_num,
@@ -546,6 +616,9 @@ def run_paddleocr_on_image(
     lang: str,
     use_gpu: bool,
     cache_dir: Optional[str],
+    debug_dir: Optional[str] = None,
+    verbose: bool = False,
+    force_ocr_fallback: bool = False,
 ) -> List[Dict[str, Any]]:
     image_path = str(image_path)
     cache_path = _configure_cache_dir(cache_dir)
@@ -629,7 +702,21 @@ def run_paddleocr_on_image(
             )
         )
 
-    if _should_run_ocr_fallback(result, Path(image_path)):
+    ocr_debug_path: Optional[Path] = None
+    if debug_dir:
+        ocr_debug_path = Path(debug_dir) / "paddleocr_ocr_raw"
+        ocr_debug_path.mkdir(parents=True, exist_ok=True)
+    run_fallback, reason, counts = _should_run_ocr_fallback(
+        result,
+        Path(image_path),
+        force=force_ocr_fallback,
+    )
+    if verbose:
+        print(
+            "PaddleOCR page 1: counts="
+            f"{counts} fallback={run_fallback} reason={reason}"
+        )
+    if run_fallback:
         ocr_engine = PaddleOCR(
             show_log=False,
             use_gpu=use_gpu,
@@ -644,9 +731,36 @@ def run_paddleocr_on_image(
             raise SystemExit(f"PaddleOCR OCR fallback failed on {image_path}: {exc}")
         ocr_timing_ms = int(round((time.perf_counter() - ocr_start) * 1000))
         page_timing_ms = timing_ms + ocr_timing_ms
+        if ocr_debug_path is not None:
+            raw_path = ocr_debug_path / "page_1.json"
+            try:
+                raw_path.write_text(
+                    json.dumps(
+                        ocr_result,
+                        ensure_ascii=True,
+                        indent=2,
+                        default=_json_fallback,
+                    )
+                )
+            except Exception:
+                pass
         for record in records:
             record["timing_ms"] = page_timing_ms
-        for bbox, text, confidence in _extract_ocr_text_blocks(ocr_result):
+        (
+            ocr_blocks,
+            ocr_raw_count,
+            ocr_short_filtered,
+            ocr_capped,
+        ) = _extract_ocr_text_blocks(ocr_result)
+        if verbose:
+            print(
+                "PaddleOCR page 1: "
+                f"ocr_raw={ocr_raw_count} "
+                f"filtered_short={ocr_short_filtered} "
+                f"capped={ocr_capped} "
+                f"emitted={len(ocr_blocks)}"
+            )
+        for bbox, text, confidence in ocr_blocks:
             records.append(
                 _build_record(
                     page=1,
