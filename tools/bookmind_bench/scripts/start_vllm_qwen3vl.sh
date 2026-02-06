@@ -11,10 +11,12 @@ OFFLINE=0
 HOST="127.0.0.1"
 PORT="8000"
 SERVED_MODEL_NAME="${BOOKMIND_VLM_MODEL_NAME:-qwen3-vl}"
+MAX_MODEL_LEN="${BOOKMIND_VLLM_MAX_MODEL_LEN:-}"
+GPU_MEM_UTIL="${BOOKMIND_VLLM_GPU_MEMORY_UTILIZATION:-}"
 
 usage() {
   cat <<'USAGE' >&2
-Usage: start_vllm_qwen3vl.sh [--offline] [--model /path/or/hf-id]
+Usage: start_vllm_qwen3vl.sh [--offline] [--model /path/or/hf-id] [--max-model-len N] [--gpu-mem 0.8]
 USAGE
 }
 
@@ -26,6 +28,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --model)
       MODEL="$2"
+      shift 2
+      ;;
+    --max-model-len)
+      MAX_MODEL_LEN="$2"
+      shift 2
+      ;;
+    --gpu-mem)
+      GPU_MEM_UTIL="$2"
       shift 2
       ;;
     -h|--help)
@@ -62,5 +72,13 @@ fi
 
 ENDPOINT_URL="http://$HOST:$PORT/v1"
 
+VLLM_ARGS=("--host" "$HOST" "--port" "$PORT" "--served-model-name" "$SERVED_MODEL_NAME" "--trust-remote-code")
+if [[ -n "$MAX_MODEL_LEN" ]]; then
+  VLLM_ARGS+=("--max-model-len" "$MAX_MODEL_LEN")
+fi
+if [[ -n "$GPU_MEM_UTIL" ]]; then
+  VLLM_ARGS+=("--gpu-memory-utilization" "$GPU_MEM_UTIL")
+fi
+
 echo "vLLM server started. Endpoint: $ENDPOINT_URL Model: $SERVED_MODEL_NAME ($MODEL)"
-exec vllm serve "$MODEL" --host "$HOST" --port "$PORT" --served-model-name "$SERVED_MODEL_NAME" --trust-remote-code
+exec vllm serve "$MODEL" "${VLLM_ARGS[@]}"
