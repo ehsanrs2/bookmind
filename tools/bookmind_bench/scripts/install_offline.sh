@@ -76,6 +76,11 @@ install_profile() {
   python -m pip install "${PIP_FLAGS[@]}" --upgrade pip setuptools wheel
   python -m pip install "${PIP_FLAGS[@]}" -r "$REQ_DIR/base.txt"
   python -m pip install "${PIP_FLAGS[@]}" -r "$req_file"
+  if [[ "$profile" == "vlm" ]]; then
+    if python -m pip show vllm-flash-attn >/dev/null 2>&1; then
+      python -m pip uninstall -y vllm-flash-attn
+    fi
+  fi
   deactivate || true
 
   echo "Offline install complete. Venv: $venv_dir (profile: $profile)"
@@ -94,6 +99,7 @@ fi
 if [[ " ${profiles[*]} " == *" ocr "* ]]; then
   echo "  export PADDLEOCR_HOME=\"$MODEL_DIR/paddleocr\""
   echo "  export PADDLE_HOME=\"$MODEL_DIR/paddleocr\""
+  echo "  export HOME=\"$MODEL_DIR/paddleocr\""
 fi
 if [[ " ${profiles[*]} " == *" vlm "* ]]; then
   echo "  export HF_HOME=\"$MODEL_DIR/qwen3_vl\""
