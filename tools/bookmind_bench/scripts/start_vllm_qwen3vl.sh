@@ -10,6 +10,7 @@ MODEL="$MODEL_DEFAULT"
 OFFLINE=0
 HOST="127.0.0.1"
 PORT="8000"
+SERVED_MODEL_NAME="${BOOKMIND_VLM_MODEL_NAME:-qwen3-vl}"
 
 usage() {
   cat <<'USAGE' >&2
@@ -61,5 +62,5 @@ fi
 
 ENDPOINT_URL="http://$HOST:$PORT/v1"
 
-echo "vLLM server started. Endpoint: $ENDPOINT_URL Model: $MODEL"
-exec vllm serve "$MODEL" --host "$HOST" --port "$PORT"
+echo "vLLM server started. Endpoint: $ENDPOINT_URL Model: $SERVED_MODEL_NAME ($MODEL)"
+exec vllm serve "$MODEL" --host "$HOST" --port "$PORT" --served-model-name "$SERVED_MODEL_NAME"
