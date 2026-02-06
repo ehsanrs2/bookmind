@@ -11,11 +11,10 @@ OFFLINE=0
 HOST="127.0.0.1"
 PORT="8000"
 SERVED_MODEL_NAME="${BOOKMIND_VLM_MODEL_NAME:-qwen3-vl}"
-DEVICE="${BOOKMIND_VLLM_DEVICE:-auto}"
 
 usage() {
   cat <<'USAGE' >&2
-Usage: start_vllm_qwen3vl.sh [--offline] [--model /path/or/hf-id] [--device auto|cuda|cpu]
+Usage: start_vllm_qwen3vl.sh [--offline] [--model /path/or/hf-id]
 USAGE
 }
 
@@ -27,10 +26,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --model)
       MODEL="$2"
-      shift 2
-      ;;
-    --device)
-      DEVICE="$2"
       shift 2
       ;;
     -h|--help)
@@ -68,4 +63,4 @@ fi
 ENDPOINT_URL="http://$HOST:$PORT/v1"
 
 echo "vLLM server started. Endpoint: $ENDPOINT_URL Model: $SERVED_MODEL_NAME ($MODEL)"
-exec vllm serve "$MODEL" --host "$HOST" --port "$PORT" --served-model-name "$SERVED_MODEL_NAME" --trust-remote-code --device "$DEVICE"
+exec vllm serve "$MODEL" --host "$HOST" --port "$PORT" --served-model-name "$SERVED_MODEL_NAME" --trust-remote-code
