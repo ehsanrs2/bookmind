@@ -150,7 +150,7 @@ if [[ " ${profiles[*]} " == *" vlm "* ]]; then
   if command -v huggingface-cli >/dev/null 2>&1; then
     huggingface-cli download "$MODEL_ID" --local-dir "$QWEN_DIR" --local-dir-use-symlinks False
   elif command -v hf >/dev/null 2>&1; then
-    hf download "$MODEL_ID" --local-dir "$QWEN_DIR" --local-dir-use-symlinks False
+    hf download "$MODEL_ID" --local-dir "$QWEN_DIR"
   else
     echo "huggingface-cli (or hf) not found; install huggingface-hub before downloading Qwen3-VL." >&2
   fi
