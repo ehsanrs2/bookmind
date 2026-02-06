@@ -63,4 +63,4 @@ fi
 ENDPOINT_URL="http://$HOST:$PORT/v1"
 
 echo "vLLM server started. Endpoint: $ENDPOINT_URL Model: $SERVED_MODEL_NAME ($MODEL)"
-exec vllm serve "$MODEL" --host "$HOST" --port "$PORT" --served-model-name "$SERVED_MODEL_NAME"
+exec vllm serve "$MODEL" --host "$HOST" --port "$PORT" --served-model-name "$SERVED_MODEL_NAME" --trust-remote-code
