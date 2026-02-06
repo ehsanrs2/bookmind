@@ -8,18 +8,24 @@ WHEEL_DIR="$BUNDLE_DIR/wheels"
 MODEL_DIR="$BUNDLE_DIR/models"
 MARKER_DIR="$MODEL_DIR/marker"
 PADDLE_DIR="$MODEL_DIR/paddleocr"
-QWEN_DIR_DEFAULT="$MODEL_DIR/qwen3_vl"
+QWEN_DIR_BASE="$MODEL_DIR/qwen3_vl"
+QWEN_4B_DIR_DEFAULT="$QWEN_DIR_BASE/4b"
+QWEN_8B_FP8_DIR_DEFAULT="$QWEN_DIR_BASE/8b_fp8"
 
 SAMPLE_PDF=""
 SAMPLE_IMAGE=""
 PROFILE="all"
-MODEL_ID_DEFAULT="Qwen/Qwen3-VL-8B-Instruct"
-MODEL_ID="${BOOKMIND_QWEN3_VL_MODEL_ID:-$MODEL_ID_DEFAULT}"
-QWEN_DIR="${BOOKMIND_QWEN3_VL_DIR:-$QWEN_DIR_DEFAULT}"
+QWEN3VL="4b"
+MODEL_ID_4B_DEFAULT="Qwen/Qwen3-VL-4B-Instruct"
+MODEL_ID_8B_FP8_DEFAULT="Qwen/Qwen3-VL-8B-Instruct-FP8"
+MODEL_ID_4B="${BOOKMIND_QWEN3_VL_4B_MODEL_ID:-$MODEL_ID_4B_DEFAULT}"
+MODEL_ID_8B_FP8="${BOOKMIND_QWEN3_VL_8B_FP8_MODEL_ID:-$MODEL_ID_8B_FP8_DEFAULT}"
+QWEN_4B_DIR="${BOOKMIND_QWEN3_VL_4B_DIR:-$QWEN_4B_DIR_DEFAULT}"
+QWEN_8B_FP8_DIR="${BOOKMIND_QWEN3_VL_8B_FP8_DIR:-$QWEN_8B_FP8_DIR_DEFAULT}"
 
 usage() {
   cat <<'EOF' >&2
-Usage: prefetch_online.sh --profile marker|ocr|vlm|all [--sample-pdf /path.pdf] [--sample-image /path.png] [--qwen-model MODEL_ID]
+Usage: prefetch_online.sh --profile marker|ocr|vlm|all [--sample-pdf /path.pdf] [--sample-image /path.png] [--qwen3vl 4b|8b_fp8|all]
 EOF
 }
 
@@ -33,8 +39,8 @@ while [[ $# -gt 0 ]]; do
       SAMPLE_IMAGE="$2"
       shift 2
       ;;
-    --qwen-model)
-      MODEL_ID="$2"
+    --qwen3vl)
+      QWEN3VL="$2"
       shift 2
       ;;
     --profile)
@@ -57,6 +63,15 @@ case "$PROFILE" in
   marker|ocr|vlm|all) ;;
   *)
     echo "Invalid profile: $PROFILE" >&2
+    usage
+    exit 1
+    ;;
+esac
+
+case "$QWEN3VL" in
+  4b|8b_fp8|all) ;;
+  *)
+    echo "Invalid --qwen3vl value: $QWEN3VL" >&2
     usage
     exit 1
     ;;
@@ -142,17 +157,30 @@ PY
 fi
 
 if [[ " ${profiles[*]} " == *" vlm "* ]]; then
-  mkdir -p "$QWEN_DIR"
-  export HF_HOME="$QWEN_DIR"
-  export HF_HUB_CACHE="$QWEN_DIR"
-  export TRANSFORMERS_CACHE="$QWEN_DIR"
+  download_qwen3vl() {
+    local model_id="$1"
+    local target_dir="$2"
 
-  if command -v huggingface-cli >/dev/null 2>&1; then
-    huggingface-cli download "$MODEL_ID" --local-dir "$QWEN_DIR" --local-dir-use-symlinks False
-  elif command -v hf >/dev/null 2>&1; then
-    hf download "$MODEL_ID" --local-dir "$QWEN_DIR"
-  else
-    echo "huggingface-cli (or hf) not found; install huggingface-hub before downloading Qwen3-VL." >&2
+    mkdir -p "$target_dir"
+    export HF_HOME="$target_dir"
+    export HF_HUB_CACHE="$target_dir"
+    export TRANSFORMERS_CACHE="$target_dir"
+
+    if command -v huggingface-cli >/dev/null 2>&1; then
+      huggingface-cli download "$model_id" --local-dir "$target_dir" --local-dir-use-symlinks False
+    elif command -v hf >/dev/null 2>&1; then
+      hf download "$model_id" --local-dir "$target_dir"
+    else
+      echo "huggingface-cli (or hf) not found; install huggingface-hub before downloading Qwen3-VL." >&2
+      return 1
+    fi
+  }
+
+  if [[ "$QWEN3VL" == "4b" || "$QWEN3VL" == "all" ]]; then
+    download_qwen3vl "$MODEL_ID_4B" "$QWEN_4B_DIR"
+  fi
+  if [[ "$QWEN3VL" == "8b_fp8" || "$QWEN3VL" == "all" ]]; then
+    download_qwen3vl "$MODEL_ID_8B_FP8" "$QWEN_8B_FP8_DIR"
   fi
 fi
 

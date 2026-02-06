@@ -102,7 +102,7 @@ if [[ " ${profiles[*]} " == *" ocr "* ]]; then
   echo "  export HOME=\"$MODEL_DIR/paddleocr\""
 fi
 if [[ " ${profiles[*]} " == *" vlm "* ]]; then
-  echo "  export HF_HOME=\"$MODEL_DIR/qwen3_vl\""
-  echo "  export HF_HUB_CACHE=\"$MODEL_DIR/qwen3_vl\""
-  echo "  export TRANSFORMERS_CACHE=\"$MODEL_DIR/qwen3_vl\""
+  echo "  export HF_HOME=\"$MODEL_DIR/qwen3_vl/4b\""
+  echo "  export HF_HUB_CACHE=\"$MODEL_DIR/qwen3_vl/4b\""
+  echo "  export TRANSFORMERS_CACHE=\"$MODEL_DIR/qwen3_vl/4b\""
 fi

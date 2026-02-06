@@ -117,6 +117,7 @@ for profile in "${profiles[@]}"; do
       ensure_cache_dir "$MODEL_DIR/paddleocr" "PaddleOCR"
       export PADDLEOCR_HOME="$MODEL_DIR/paddleocr"
       export PADDLE_HOME="$MODEL_DIR/paddleocr"
+      export HOME="$MODEL_DIR/paddleocr"
       python "$ROOT_DIR/tools/bookmind_bench/run.py" paddleocr --help
       if [[ -n "$SAMPLE_IMAGE" ]]; then
         if [[ ! -f "$SAMPLE_IMAGE" ]]; then
@@ -129,10 +130,12 @@ for profile in "${profiles[@]}"; do
       fi
       ;;
     vlm)
-      ensure_cache_dir "$MODEL_DIR/qwen3_vl" "Qwen3-VL"
-      export HF_HOME="$MODEL_DIR/qwen3_vl"
-      export HF_HUB_CACHE="$MODEL_DIR/qwen3_vl"
-      export TRANSFORMERS_CACHE="$MODEL_DIR/qwen3_vl"
+      VLM_DIR_DEFAULT="$MODEL_DIR/qwen3_vl/4b"
+      VLM_DIR="${BOOKMIND_QWEN3_VL_DIR:-$VLM_DIR_DEFAULT}"
+      ensure_cache_dir "$VLM_DIR" "Qwen3-VL"
+      export HF_HOME="$VLM_DIR"
+      export HF_HUB_CACHE="$VLM_DIR"
+      export TRANSFORMERS_CACHE="$VLM_DIR"
       ;;
   esac
 
