@@ -78,11 +78,24 @@ Start the server in offline mode (OpenAI-compatible) on a 12GB GPU:
 ./tools/bookmind_bench/scripts/start_vllm_qwen3vl.sh --offline --preset 4b_12gb_safe
 ```
 
+Why this preset matters: vLLM + Qwen3-VL may OOM during initialization because
+the engine profiles a maximum-size video input. The 12GB presets disable video
+and cap image size via `--limit-mm-per-prompt` (video count `0`, image
+`512x512`). You can override the image limit if needed:
+
+```bash
+./tools/bookmind_bench/scripts/start_vllm_qwen3vl.sh --offline --preset 4b_12gb_safe \
+  --limit-mm '{"video":{"count":0},"image":{"count":1,"width":384,"height":384}}'
+```
+
 Run the smoke test:
 ```bash
 python tools/bookmind_bench/scripts/vlm_smoke_test.py \
   --image /path/to/crop.png
 ```
+
+Quick regression check: the server should start without CUDA OOM during
+initialization (before any requests are sent).
 
 Switch to 8B-FP8 when you have more VRAM (download + point to the snapshot):
 ```bash

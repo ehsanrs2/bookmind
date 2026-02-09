@@ -16,10 +16,11 @@ MAX_MODEL_LEN="${BOOKMIND_VLLM_MAX_MODEL_LEN:-}"
 GPU_MEM_UTIL="${BOOKMIND_VLLM_GPU_MEMORY_UTILIZATION:-}"
 MAX_NUM_SEQS="${BOOKMIND_VLLM_MAX_NUM_SEQS:-}"
 MAX_NUM_BATCHED_TOKENS="${BOOKMIND_VLLM_MAX_NUM_BATCHED_TOKENS:-}"
+LIMIT_MM="${BOOKMIND_VLLM_LIMIT_MM:-}"
 
 usage() {
   cat <<'USAGE' >&2
-Usage: start_vllm_qwen3vl.sh [--offline] [--model /path/or/hf-id] [--preset NAME] [--max-model-len N] [--gpu-mem 0.8] [--max-num-seqs N] [--max-num-batched-tokens N]
+Usage: start_vllm_qwen3vl.sh [--offline] [--model /path/or/hf-id] [--preset NAME] [--max-model-len N] [--gpu-mem 0.8] [--max-num-seqs N] [--max-num-batched-tokens N] [--limit-mm JSON]
 USAGE
 }
 
@@ -53,6 +54,10 @@ while [[ $# -gt 0 ]]; do
       MAX_NUM_BATCHED_TOKENS="$2"
       shift 2
       ;;
+    --limit-mm)
+      LIMIT_MM="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -70,6 +75,7 @@ if [[ -n "$PRESET" ]]; then
   PRESET_GPU_MEM_UTIL=""
   PRESET_MAX_NUM_SEQS=""
   PRESET_MAX_NUM_BATCHED_TOKENS=""
+  PRESET_LIMIT_MM=""
 
   case "$PRESET" in
     4b_12gb_safe)
@@ -77,12 +83,14 @@ if [[ -n "$PRESET" ]]; then
       PRESET_GPU_MEM_UTIL="0.80"
       PRESET_MAX_NUM_SEQS="1"
       PRESET_MAX_NUM_BATCHED_TOKENS="2048"
+      PRESET_LIMIT_MM='{"video":{"count":0},"image":{"count":1,"width":512,"height":512}}'
       ;;
     8b_fp8_12gb_safe)
       PRESET_MAX_MODEL_LEN="4096"
       PRESET_GPU_MEM_UTIL="0.80"
       PRESET_MAX_NUM_SEQS="1"
       PRESET_MAX_NUM_BATCHED_TOKENS="1024"
+      PRESET_LIMIT_MM='{"video":{"count":0},"image":{"count":1,"width":512,"height":512}}'
       ;;
     high_mem_default)
       PRESET_MAX_MODEL_LEN="8192"
@@ -108,6 +116,12 @@ if [[ -n "$PRESET" ]]; then
   fi
   if [[ -z "$MAX_NUM_BATCHED_TOKENS" ]]; then
     MAX_NUM_BATCHED_TOKENS="$PRESET_MAX_NUM_BATCHED_TOKENS"
+  fi
+  if [[ -z "$LIMIT_MM" ]]; then
+    LIMIT_MM="$PRESET_LIMIT_MM"
+  fi
+  if [[ "$PRESET" == *_12gb_safe ]]; then
+    export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
   fi
 fi
 
@@ -146,6 +160,15 @@ fi
 if [[ -n "$MAX_NUM_BATCHED_TOKENS" ]]; then
   VLLM_ARGS+=("--max-num-batched-tokens" "$MAX_NUM_BATCHED_TOKENS")
 fi
+if [[ -n "$LIMIT_MM" ]]; then
+  VLLM_ARGS+=("--limit-mm-per-prompt" "$LIMIT_MM")
+fi
 
 echo "vLLM server started. Endpoint: $ENDPOINT_URL Model: $SERVED_MODEL_NAME ($MODEL)"
+if [[ -n "${PYTORCH_CUDA_ALLOC_CONF:-}" ]]; then
+  echo "PYTORCH_CUDA_ALLOC_CONF=$PYTORCH_CUDA_ALLOC_CONF"
+fi
+if [[ -n "$LIMIT_MM" ]]; then
+  echo "limit-mm-per-prompt=$LIMIT_MM"
+fi
 exec vllm serve "$MODEL" "${VLLM_ARGS[@]}"
