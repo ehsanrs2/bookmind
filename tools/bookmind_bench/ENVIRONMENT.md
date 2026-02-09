@@ -73,6 +73,7 @@ Online prefetch into the offline bundle (default 4B snapshot):
 ./tools/bookmind_bench/scripts/prefetch_online.sh --profile vlm --qwen3vl 4b
 ```
 
+**12GB VRAM (caption)**
 Start the server in offline mode (OpenAI-compatible) on a 12GB GPU:
 ```bash
 ./tools/bookmind_bench/scripts/start_vllm_qwen3vl.sh --offline --preset 4b_12gb_caption
@@ -102,7 +103,11 @@ python tools/bookmind_bench/scripts/vlm_smoke_test.py \
 Quick regression check: the server should start without CUDA OOM during
 initialization (before any requests are sent).
 
-Switch to 8B-FP8 when you have more VRAM (download + point to the snapshot):
+**More VRAM**
+On larger GPUs, use the high-memory preset and a larger model snapshot. You can
+also increase `max_model_len` and image size for longer contexts or higher-res
+inputs.
+
 ```bash
 ./tools/bookmind_bench/scripts/prefetch_online.sh --profile vlm --qwen3vl 8b_fp8
 ./tools/bookmind_bench/scripts/start_vllm_qwen3vl.sh --offline \

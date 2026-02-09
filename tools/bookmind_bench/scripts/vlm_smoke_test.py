@@ -30,6 +30,18 @@ def main() -> int:
         help="Model identifier (default: env BOOKMIND_VLM_MODEL or qwen3-vl)",
     )
     parser.add_argument("--image", required=True, help="Path to a local PNG image")
+    parser.add_argument(
+        "--max_tokens",
+        type=int,
+        default=256,
+        help="Max tokens to generate (default: 256)",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.2,
+        help="Sampling temperature (default: 0.2)",
+    )
     args = parser.parse_args()
 
     image_path = Path(args.image)
@@ -51,8 +63,8 @@ def main() -> int:
                 ],
             }
         ],
-        temperature=0.2,
-        max_tokens=256,
+        temperature=args.temperature,
+        max_tokens=args.max_tokens,
     )
 
     content = response.choices[0].message.content
