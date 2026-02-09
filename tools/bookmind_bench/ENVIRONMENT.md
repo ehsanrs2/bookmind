@@ -75,16 +75,21 @@ Online prefetch into the offline bundle (default 4B snapshot):
 
 Start the server in offline mode (OpenAI-compatible) on a 12GB GPU:
 ```bash
-./tools/bookmind_bench/scripts/start_vllm_qwen3vl.sh --offline --preset 4b_12gb_safe
+./tools/bookmind_bench/scripts/start_vllm_qwen3vl.sh --offline --preset 4b_12gb_caption
 ```
 
 Why this preset matters: vLLM + Qwen3-VL may OOM during initialization because
-the engine profiles a maximum-size video input. The 12GB presets disable video
-and cap image size via `--limit-mm-per-prompt` (video count `0`, image
-`512x512`). You can override the image limit if needed:
+the engine profiles a maximum-size video input. The 12GB presets disable video,
+cap image size, and lower `max_model_len` to fit KV cache requirements. For
+captioning, ~1.5k tokens of context is typically enough. The presets also
+disable multimodal encoder compilation to avoid extra overhead on low VRAM.
+If you want to re-enable encoder compilation, pass `--compile-mm-encoder true`.
+
+By default the 12GB presets apply `--limit-mm-per-prompt` (video count `0`,
+image `384x384`). You can override the image limit if needed:
 
 ```bash
-./tools/bookmind_bench/scripts/start_vllm_qwen3vl.sh --offline --preset 4b_12gb_safe \
+./tools/bookmind_bench/scripts/start_vllm_qwen3vl.sh --offline --preset 4b_12gb_caption \
   --limit-mm '{"video":{"count":0},"image":{"count":1,"width":384,"height":384}}'
 ```
 

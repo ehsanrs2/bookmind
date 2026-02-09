@@ -17,10 +17,11 @@ GPU_MEM_UTIL="${BOOKMIND_VLLM_GPU_MEMORY_UTILIZATION:-}"
 MAX_NUM_SEQS="${BOOKMIND_VLLM_MAX_NUM_SEQS:-}"
 MAX_NUM_BATCHED_TOKENS="${BOOKMIND_VLLM_MAX_NUM_BATCHED_TOKENS:-}"
 LIMIT_MM="${BOOKMIND_VLLM_LIMIT_MM:-}"
+COMPILE_MM_ENCODER="${BOOKMIND_VLLM_COMPILE_MM_ENCODER:-}"
 
 usage() {
   cat <<'USAGE' >&2
-Usage: start_vllm_qwen3vl.sh [--offline] [--model /path/or/hf-id] [--preset NAME] [--max-model-len N] [--gpu-mem 0.8] [--max-num-seqs N] [--max-num-batched-tokens N] [--limit-mm JSON]
+Usage: start_vllm_qwen3vl.sh [--offline] [--model /path/or/hf-id] [--preset NAME] [--max-model-len N] [--gpu-mem 0.8] [--max-num-seqs N] [--max-num-batched-tokens N] [--limit-mm JSON] [--compile-mm-encoder true|false]
 USAGE
 }
 
@@ -58,6 +59,10 @@ while [[ $# -gt 0 ]]; do
       LIMIT_MM="$2"
       shift 2
       ;;
+    --compile-mm-encoder)
+      COMPILE_MM_ENCODER="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -76,14 +81,24 @@ if [[ -n "$PRESET" ]]; then
   PRESET_MAX_NUM_SEQS=""
   PRESET_MAX_NUM_BATCHED_TOKENS=""
   PRESET_LIMIT_MM=""
+  PRESET_COMPILE_MM_ENCODER=""
 
   case "$PRESET" in
-    4b_12gb_safe)
-      PRESET_MAX_MODEL_LEN="4096"
-      PRESET_GPU_MEM_UTIL="0.80"
+    4b_12gb_caption)
+      PRESET_MAX_MODEL_LEN="1536"
+      PRESET_GPU_MEM_UTIL="0.90"
       PRESET_MAX_NUM_SEQS="1"
-      PRESET_MAX_NUM_BATCHED_TOKENS="2048"
-      PRESET_LIMIT_MM='{"video":{"count":0},"image":{"count":1,"width":512,"height":512}}'
+      PRESET_MAX_NUM_BATCHED_TOKENS="1024"
+      PRESET_LIMIT_MM='{"video":{"count":0},"image":{"count":1,"width":384,"height":384}}'
+      PRESET_COMPILE_MM_ENCODER="false"
+      ;;
+    4b_12gb_safe)
+      PRESET_MAX_MODEL_LEN="1536"
+      PRESET_GPU_MEM_UTIL="0.90"
+      PRESET_MAX_NUM_SEQS="1"
+      PRESET_MAX_NUM_BATCHED_TOKENS="1024"
+      PRESET_LIMIT_MM='{"video":{"count":0},"image":{"count":1,"width":384,"height":384}}'
+      PRESET_COMPILE_MM_ENCODER="false"
       ;;
     8b_fp8_12gb_safe)
       PRESET_MAX_MODEL_LEN="4096"
@@ -91,6 +106,7 @@ if [[ -n "$PRESET" ]]; then
       PRESET_MAX_NUM_SEQS="1"
       PRESET_MAX_NUM_BATCHED_TOKENS="1024"
       PRESET_LIMIT_MM='{"video":{"count":0},"image":{"count":1,"width":512,"height":512}}'
+      PRESET_COMPILE_MM_ENCODER="false"
       ;;
     high_mem_default)
       PRESET_MAX_MODEL_LEN="8192"
@@ -120,8 +136,11 @@ if [[ -n "$PRESET" ]]; then
   if [[ -z "$LIMIT_MM" ]]; then
     LIMIT_MM="$PRESET_LIMIT_MM"
   fi
-  if [[ "$PRESET" == *_12gb_safe ]]; then
-    export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+  if [[ -z "$COMPILE_MM_ENCODER" ]]; then
+    COMPILE_MM_ENCODER="$PRESET_COMPILE_MM_ENCODER"
+  fi
+  if [[ "$PRESET" == "4b_12gb_caption" || "$PRESET" == "4b_12gb_safe" || "$PRESET" == "8b_fp8_12gb_safe" ]]; then
+    export PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF:-expandable_segments:True}"
   fi
 fi
 
@@ -163,12 +182,22 @@ fi
 if [[ -n "$LIMIT_MM" ]]; then
   VLLM_ARGS+=("--limit-mm-per-prompt" "$LIMIT_MM")
 fi
+if [[ -n "$COMPILE_MM_ENCODER" ]]; then
+  if [[ "$COMPILE_MM_ENCODER" != "true" && "$COMPILE_MM_ENCODER" != "false" ]]; then
+    echo "Invalid --compile-mm-encoder value: $COMPILE_MM_ENCODER (use true|false)" >&2
+    exit 1
+  fi
+  VLLM_ARGS+=("--compilation-config" "{\"compile_mm_encoder\":$COMPILE_MM_ENCODER}")
+fi
 
 echo "vLLM server started. Endpoint: $ENDPOINT_URL Model: $SERVED_MODEL_NAME ($MODEL)"
-if [[ -n "${PYTORCH_CUDA_ALLOC_CONF:-}" ]]; then
-  echo "PYTORCH_CUDA_ALLOC_CONF=$PYTORCH_CUDA_ALLOC_CONF"
+if [[ -n "${PYTORCH_ALLOC_CONF:-}" ]]; then
+  echo "PYTORCH_ALLOC_CONF=$PYTORCH_ALLOC_CONF"
 fi
 if [[ -n "$LIMIT_MM" ]]; then
   echo "limit-mm-per-prompt=$LIMIT_MM"
+fi
+if [[ -n "$COMPILE_MM_ENCODER" ]]; then
+  echo "compile-mm-encoder=$COMPILE_MM_ENCODER"
 fi
 exec vllm serve "$MODEL" "${VLLM_ARGS[@]}"
