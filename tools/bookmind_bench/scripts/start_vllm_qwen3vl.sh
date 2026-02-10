@@ -21,7 +21,32 @@ COMPILE_MM_ENCODER="${BOOKMIND_VLLM_COMPILE_MM_ENCODER:-}"
 
 usage() {
   cat <<'USAGE' >&2
-Usage: start_vllm_qwen3vl.sh [--offline] [--model /path/or/hf-id] [--preset NAME] [--max-model-len N] [--gpu-mem 0.8] [--max-num-seqs N] [--max-num-batched-tokens N] [--limit-mm JSON] [--compile-mm-encoder true|false]
+Start a local OpenAI-compatible vLLM server for Qwen3-VL.
+
+Usage: start_vllm_qwen3vl.sh [--offline] [--model /path/or/hf-id] [--preset NAME] \
+  [--max-model-len N] [--gpu-mem 0.8] [--max-num-seqs N] \
+  [--max-num-batched-tokens N] [--limit-mm JSON] [--compile-mm-encoder true|false]
+
+Presets:
+  4b_12gb_caption   Tuned to fit on 12GB VRAM (image-only, small image, short context).
+  8b_fp8_12gb_safe  Very conservative; may still be tight on 12GB.
+  high_mem_default  For higher VRAM GPUs.
+
+Flags:
+  --offline                 Enable offline HF/Transformers mode; requires local model path.
+  --model / --preset         Override the model path or choose a preset (preset fills defaults).
+  --max-model-len            Maximum context length (KV cache size driver).
+  --gpu-mem                  GPU memory utilization for vLLM (0-1).
+  --max-num-seqs             Max concurrent sequences.
+  --max-num-batched-tokens   Max tokens per batch.
+  --limit-mm                 JSON passthrough to --limit-mm-per-prompt.
+
+Examples:
+  ./tools/bookmind_bench/scripts/start_vllm_qwen3vl.sh --offline --preset 4b_12gb_caption
+  ./tools/bookmind_bench/scripts/start_vllm_qwen3vl.sh --offline --preset 4b_12gb_caption \
+    --limit-mm '{"video":{"count":0},"image":{"count":1,"width":384,"height":384}}'
+  ./tools/bookmind_bench/scripts/start_vllm_qwen3vl.sh --preset high_mem_default \
+    --max-model-len 8192 --gpu-mem 0.90
 USAGE
 }
 

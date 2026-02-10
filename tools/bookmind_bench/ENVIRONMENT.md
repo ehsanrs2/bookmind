@@ -100,6 +100,27 @@ python tools/bookmind_bench/scripts/vlm_smoke_test.py \
   --image /path/to/crop.png
 ```
 
+## Quickstart (VLM captions)
+1) Start the server with the 12GB preset:
+```bash
+./tools/bookmind_bench/scripts/start_vllm_qwen3vl.sh --offline --preset 4b_12gb_caption
+```
+
+2) Run the smoke test:
+```bash
+python tools/bookmind_bench/scripts/vlm_smoke_test.py \
+  --image /path/to/crop.png
+```
+
+3) Run the VLM bench:
+```bash
+python tools/bookmind_bench/run.py vlm \
+  --endpoint http://127.0.0.1:8000/v1 \
+  --model qwen3-vl \
+  --jobs <path>/vlm_jobs.jsonl \
+  --out <outdir>
+```
+
 Quick regression check: the server should start without CUDA OOM during
 initialization (before any requests are sent).
 
