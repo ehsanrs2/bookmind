@@ -40,6 +40,9 @@ Flags:
   --max-num-seqs             Max concurrent sequences.
   --max-num-batched-tokens   Max tokens per batch.
   --limit-mm                 JSON passthrough to --limit-mm-per-prompt.
+  --compile-mm-encoder       true|false.
+                             false reduces VRAM overhead (recommended for 12GB).
+                             true may improve throughput on larger GPUs.
 
 Examples:
   ./tools/bookmind_bench/scripts/start_vllm_qwen3vl.sh --offline --preset 4b_12gb_caption

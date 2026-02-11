@@ -106,6 +106,8 @@ python tools/bookmind_bench/scripts/vlm_smoke_test.py \
 ./tools/bookmind_bench/scripts/start_vllm_qwen3vl.sh --offline --preset 4b_12gb_caption
 ```
 
+The 12GB preset keeps multimodal encoder compilation off (`--compile-mm-encoder false`) to reduce VRAM pressure.
+
 2) Run the smoke test:
 ```bash
 python tools/bookmind_bench/scripts/vlm_smoke_test.py \
@@ -127,7 +129,8 @@ initialization (before any requests are sent).
 **More VRAM**
 On larger GPUs, use the high-memory preset and a larger model snapshot. You can
 also increase `max_model_len` and image size for longer contexts or higher-res
-inputs.
+inputs. If memory headroom allows, test `--compile-mm-encoder true` for possible
+throughput gains.
 
 ```bash
 ./tools/bookmind_bench/scripts/prefetch_online.sh --profile vlm --qwen3vl 8b_fp8
