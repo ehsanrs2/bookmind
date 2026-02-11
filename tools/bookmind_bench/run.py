@@ -207,6 +207,8 @@ def _cmd_vlm(args: argparse.Namespace) -> int:
         model=args.model,
         paddleocr_jsonl=str(paddleocr_path) if paddleocr_path else None,
         use_ocr_hints=args.use_ocr_hints,
+        max_tokens=args.max_tokens,
+        temperature=args.temperature,
     )
     output_path = out_dir / "vlm" / "output.jsonl"
     print(f"VLM wrote {written} caption(s) to {output_path}")
@@ -375,6 +377,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         type=lambda v: str(v).lower() in {"1", "true", "yes", "y"},
         help="Include OCR hints in the prompt (default true)",
+    )
+    vlm.add_argument(
+        "--max_tokens",
+        type=int,
+        default=256,
+        help="Max tokens to generate (default 256)",
+    )
+    vlm.add_argument(
+        "--temperature",
+        type=float,
+        default=0.2,
+        help="Sampling temperature (default 0.2)",
     )
     vlm.set_defaults(func=_cmd_vlm)
 

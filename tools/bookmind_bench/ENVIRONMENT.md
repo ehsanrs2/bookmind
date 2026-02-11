@@ -126,6 +126,22 @@ python tools/bookmind_bench/run.py vlm \
 Quick regression check: the server should start without CUDA OOM during
 initialization (before any requests are sent).
 
+## Generate VLM captions for a run directory
+1) Start the server:
+```bash
+./tools/bookmind_bench/scripts/start_vllm_qwen3vl.sh --offline --preset 4b_12gb_caption
+```
+
+2) Run captions from the PaddleOCR run directory:
+```bash
+./tools/bookmind_bench/scripts/run_vlm_captions.sh --run <RUN_DIR>
+```
+
+3) Merge VLM captions with OCR output:
+```bash
+python tools/bookmind_bench/run.py merge --out <RUN_DIR>
+```
+
 **More VRAM**
 On larger GPUs, use the high-memory preset and a larger model snapshot. You can
 also increase `max_model_len` and image size for longer contexts or higher-res

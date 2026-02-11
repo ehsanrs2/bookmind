@@ -21,6 +21,8 @@ DEFAULT_PROMPT_TEMPLATE = "technical_diagram_v1"
 DEFAULT_IOU_THRESHOLD = 0.01
 DEFAULT_OCR_MAX_CHARS = 800
 DEFAULT_OCR_MAX_ITEMS = 30
+DEFAULT_MAX_TOKENS = 256
+DEFAULT_TEMPERATURE = 0.2
 
 
 @dataclass
@@ -176,7 +178,13 @@ def _extract_caption(response: Dict[str, Any]) -> str:
     return content.strip()
 
 
-def _build_payload(model: str, prompt: str, image_path: Path) -> Dict[str, Any]:
+def _build_payload(
+    model: str,
+    prompt: str,
+    image_path: Path,
+    max_tokens: int,
+    temperature: float,
+) -> Dict[str, Any]:
     image_b64 = _encode_image_base64(image_path)
     return {
         "model": model,
@@ -192,8 +200,8 @@ def _build_payload(model: str, prompt: str, image_path: Path) -> Dict[str, Any]:
                 ],
             }
         ],
-        "temperature": 0.2,
-        "max_tokens": 512,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
     }
 
 
@@ -204,6 +212,8 @@ def run_vlm_caption_jobs(
     model: Optional[str] = None,
     paddleocr_jsonl: Optional[str] = None,
     use_ocr_hints: bool = True,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    temperature: float = DEFAULT_TEMPERATURE,
 ) -> int:
     jobs_path = Path(jobs_jsonl)
     if not jobs_path.exists():
@@ -244,7 +254,13 @@ def run_vlm_caption_jobs(
 
         start = time.perf_counter()
         try:
-            payload = _build_payload(model, prompt, Path(crop_path))
+            payload = _build_payload(
+                model,
+                prompt,
+                Path(crop_path),
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
             response = _post_chat_completion(endpoint, payload)
             caption = _extract_caption(response)
         except urllib.error.HTTPError as exc:
