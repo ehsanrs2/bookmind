@@ -15,6 +15,7 @@ from engines.paddleocr_engine import (
 )
 from engines.vlm_caption_engine import run_vlm_caption_jobs
 from engines.vlm_hook import plan_vlm_jobs
+from merge import merge_outputs
 from render_pdf import parse_pages, render_pdf_pages
 
 
@@ -212,6 +213,42 @@ def _cmd_vlm(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_merge(args: argparse.Namespace) -> int:
+    out_dir = Path(args.out)
+
+    paddle_path = Path(args.paddle) if args.paddle else out_dir / "paddleocr" / "output.jsonl"
+    if not paddle_path.exists():
+        raise SystemExit(f"PaddleOCR JSONL not found: {paddle_path}")
+
+    if args.vlm:
+        vlm_path: Path | None = Path(args.vlm)
+    else:
+        inferred_vlm = out_dir / "vlm" / "output.jsonl"
+        vlm_path = inferred_vlm if inferred_vlm.exists() else None
+
+    if vlm_path is not None and not vlm_path.exists():
+        raise SystemExit(f"VLM JSONL not found: {vlm_path}")
+
+    output_path = out_dir / "ingest" / "records.jsonl"
+    stats = merge_outputs(
+        paddle_jsonl=paddle_path,
+        vlm_jsonl=vlm_path,
+        out_jsonl=output_path,
+        min_text_chars=args.min_text_chars,
+        bbox_tol=args.bbox_tol,
+        iou_threshold=args.iou,
+    )
+    print(f"Merge wrote {stats.total_emitted} record(s) to {stats.output_path}")
+    print(
+        "By type: "
+        f"text={stats.emitted_by_type.get('text', 0)} "
+        f"table={stats.emitted_by_type.get('table', 0)} "
+        f"figure_caption={stats.emitted_by_type.get('figure_caption', 0)}"
+    )
+    print(f"Figure captions matched: {stats.figure_captions_matched}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bookmind-bench",
@@ -340,6 +377,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="Include OCR hints in the prompt (default true)",
     )
     vlm.set_defaults(func=_cmd_vlm)
+
+    merge = subparsers.add_parser(
+        "merge", help="Merge PaddleOCR + optional VLM outputs into ingest JSONL"
+    )
+    merge.add_argument(
+        "--paddle",
+        required=False,
+        help="Path to PaddleOCR output JSONL (default <out>/paddleocr/output.jsonl)",
+    )
+    merge.add_argument(
+        "--vlm",
+        required=False,
+        help="Optional path to VLM output JSONL (default <out>/vlm/output.jsonl if present)",
+    )
+    merge.add_argument("--out", required=True, help="Output run directory")
+    merge.add_argument(
+        "--min-text-chars",
+        type=int,
+        default=20,
+        help="Skip short OCR text blocks below this length (default 20)",
+    )
+    merge.add_argument(
+        "--bbox-tol",
+        type=int,
+        default=2,
+        help="Per-coordinate bbox tolerance in pixels (default 2)",
+    )
+    merge.add_argument(
+        "--iou",
+        type=float,
+        default=0.95,
+        help="IoU threshold for fallback figure-caption matching (default 0.95)",
+    )
+    merge.set_defaults(func=_cmd_merge)
 
     return parser
 

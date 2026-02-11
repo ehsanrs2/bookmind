@@ -203,3 +203,51 @@ OCR hints behavior:
 - If `--paddleocr_jsonl` is provided and `--use_ocr_hints true`, the runner gathers `ocr_text` blocks
   whose bbox intersects the figure bbox (IoU > 0.01).
 - Hints are truncated to keep prompts compact (default 800 chars, 30 items).
+
+## Merge output (ingest_record)
+
+This is a bench-only normalization step that prepares artifacts for later
+Bookmind/OpenWebUI ingestion integration.
+
+Command example:
+```
+python tools/bookmind_bench/run.py merge --out <run_dir>
+```
+
+Input defaults:
+- PaddleOCR: `<run_dir>/paddleocr/output.jsonl`
+- VLM (optional): `<run_dir>/vlm/output.jsonl` when present
+
+Output location:
+```
+<run_dir>/ingest/records.jsonl
+```
+
+Output schema (`ingest_record`, one JSON object per line):
+```json
+{
+  "stable_id": "8f745148f0f56061",
+  "page": 1,
+  "content_type": "text",
+  "text": "Normalized text content",
+  "bbox": [12, 34, 420, 460],
+  "meta": {
+    "pdf_page_start": 1,
+    "pdf_page_end": 1,
+    "source_engines": ["paddleocr"],
+    "block_type": "text",
+    "confidence": 0.91,
+    "trace": {
+      "paddleocr_line_ids": [14],
+      "vlm_line_id": null
+    }
+  }
+}
+```
+
+Field notes:
+- `stable_id`: deterministic ID from `sha1(f"{page}|{type}|{bbox_norm}|{text_norm}")[:16]`.
+- `content_type`: one of `text`, `table`, `figure_caption`.
+- `bbox`: rounded integer bbox `[x0, y0, x1, y1]` or `null`.
+- `source_engines`: `["paddleocr"]` for text/tables and `["paddleocr","vlm"]` for matched figure captions.
+- Figure-caption matching is page-aware and uses exact bbox first, then coordinate tolerance (`--bbox-tol`), then IoU fallback (`--iou`).
