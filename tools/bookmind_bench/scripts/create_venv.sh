@@ -13,9 +13,10 @@ INSTALL_DEV=0
 
 usage() {
   cat <<'EOF' >&2
-Usage: create_venv.sh [--online|--offline|--mode online|offline] --profile marker|ocr|vlm|all [--dev]
+Usage: create_venv.sh [--online|--offline|--mode online|offline] --profile marker|ocr|layout|vlm|all [--dev]
 Examples:
   create_venv.sh --online --profile ocr
+  create_venv.sh --online --profile layout
   create_venv.sh --offline --profile marker
   create_venv.sh --online --profile all --dev
 EOF
@@ -65,7 +66,7 @@ case "$MODE" in
 esac
 
 case "$PROFILE" in
-  marker|ocr|vlm|all) ;;
+  marker|ocr|layout|vlm|all) ;;
   *)
     echo "Invalid profile: $PROFILE" >&2
     usage
@@ -88,7 +89,7 @@ PADDLE_CUDA_INDEX="${PADDLE_CUDA_INDEX:-}"
 
 profiles=()
 if [[ "$PROFILE" == "all" ]]; then
-  profiles=(marker ocr vlm)
+  profiles=(marker ocr layout vlm)
 else
   profiles=("$PROFILE")
 fi
@@ -101,6 +102,7 @@ create_profile_env() {
   case "$profile" in
     marker) req_file="$REQ_DIR/marker.txt" ;;
     ocr) req_file="$REQ_DIR/paddleocr.txt" ;;
+    layout) req_file="$REQ_DIR/layout.txt" ;;
     vlm) req_file="$REQ_DIR/vlm.txt" ;;
   esac
 
@@ -119,7 +121,7 @@ create_profile_env() {
     python -m pip install "${PIP_FLAGS[@]}" -r "$REQ_DIR/dev.txt"
   fi
 
-  if [[ "$MODE" == "online" && "$profile" == "ocr" ]]; then
+  if [[ "$MODE" == "online" && ( "$profile" == "ocr" || "$profile" == "layout" ) ]]; then
     local cuda_ver=""
     if command -v nvidia-smi >/dev/null 2>&1; then
       cuda_ver="$(nvidia-smi --query-gpu=cuda_version --format=csv,noheader 2>/dev/null | head -n 1 | tr -d '[:space:]')"

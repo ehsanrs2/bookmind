@@ -8,6 +8,7 @@ and let you ship an offline wheel + model bundle to air-gapped machines.
 - Venvs:
   - `.venv_bookmind_bench_marker/`
   - `.venv_bookmind_bench_ocr/`
+  - `.venv_bookmind_bench_layout/`
   - `.venv_bookmind_bench_vlm/`
 - Requirements: `tools/bookmind_bench/requirements/*.txt`
 - Offline bundle: `tools/bookmind_bench/offline_bundle/` (git-ignored)
@@ -16,6 +17,7 @@ and let you ship an offline wheel + model bundle to air-gapped machines.
 Profiles keep dependency stacks isolated:
 - `marker`: base + marker requirements
 - `ocr`: base + PaddleOCR requirements
+- `layout`: base + LayoutParser/Detectron2 + PaddleOCR requirements
 - `vlm`: base + VLM requirements
 - `dev`: optional dev tooling (`--dev`) installed into any chosen profile env
 
@@ -34,6 +36,8 @@ but new installs should use the per-profile venvs above.
 Notes:
 - `--sample-pdf` triggers a Marker warmup run to populate caches.
 - `--sample-image` optionally triggers a PP-Structure warmup.
+- `--profile layout` also attempts to prewarm LayoutParser PubLayNet assets into
+  `offline_bundle/models/layoutparser_publaynet`.
 - Override Qwen3-VL download IDs with `BOOKMIND_QWEN3_VL_4B_MODEL_ID=...` or
   `BOOKMIND_QWEN3_VL_8B_FP8_MODEL_ID=...`.
 - Override snapshot directories with `BOOKMIND_QWEN3_VL_4B_DIR=...` or
@@ -55,6 +59,7 @@ variables to the local bundle paths.
 ```bash
 ./tools/bookmind_bench/scripts/create_venv.sh --online --profile marker
 ./tools/bookmind_bench/scripts/create_venv.sh --offline --profile ocr
+./tools/bookmind_bench/scripts/create_venv.sh --offline --profile layout
 ./tools/bookmind_bench/scripts/create_venv.sh --online --profile vlm --dev
 ```
 
@@ -66,6 +71,8 @@ variables to the local bundle paths.
 ```
 
 This enforces offline flags (HF/Transformers) and runs the CLI help commands.
+For `--profile layout`, a one-page layout smoke run is performed when `--image`
+is provided.
 
 ## Qwen3-VL (vLLM) workflow
 Online prefetch into the offline bundle (default 4B snapshot):
@@ -161,6 +168,7 @@ throughput gains.
 - **Cache locations**: If models fail to load offline, confirm the env vars:
   - `XDG_CACHE_HOME` + `MARKER_CACHE_DIR` -> `offline_bundle/models/marker`
   - `PADDLEOCR_HOME` + `PADDLE_HOME` + `HOME` -> `offline_bundle/models/paddleocr`
+  - `BOOKMIND_LAYOUT_MODEL_DIR` -> `offline_bundle/models/layoutparser_publaynet`
   - `HF_HOME` + `HF_HUB_CACHE` + `TRANSFORMERS_CACHE` -> `offline_bundle/models/qwen3_vl/*`
 - **GPU wheels**: `paddlepaddle-gpu` wheels are CUDA-specific; ensure the
   online machine downloads wheels compatible with the offline GPU stack.

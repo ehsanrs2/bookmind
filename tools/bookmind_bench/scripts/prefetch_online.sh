@@ -8,6 +8,7 @@ WHEEL_DIR="$BUNDLE_DIR/wheels"
 MODEL_DIR="$BUNDLE_DIR/models"
 MARKER_DIR="$MODEL_DIR/marker"
 PADDLE_DIR="$MODEL_DIR/paddleocr"
+LAYOUT_DIR="$MODEL_DIR/layoutparser_publaynet"
 QWEN_DIR_BASE="$MODEL_DIR/qwen3_vl"
 QWEN_4B_DIR_DEFAULT="$QWEN_DIR_BASE/4b"
 QWEN_8B_FP8_DIR_DEFAULT="$QWEN_DIR_BASE/8b_fp8"
@@ -25,7 +26,7 @@ QWEN_8B_FP8_DIR="${BOOKMIND_QWEN3_VL_8B_FP8_DIR:-$QWEN_8B_FP8_DIR_DEFAULT}"
 
 usage() {
   cat <<'EOF' >&2
-Usage: prefetch_online.sh --profile marker|ocr|vlm|all [--sample-pdf /path.pdf] [--sample-image /path.png] [--qwen3vl 4b|8b_fp8|all]
+Usage: prefetch_online.sh --profile marker|ocr|layout|vlm|all [--sample-pdf /path.pdf] [--sample-image /path.png] [--qwen3vl 4b|8b_fp8|all]
 EOF
 }
 
@@ -60,7 +61,7 @@ while [[ $# -gt 0 ]]; do
  done
 
 case "$PROFILE" in
-  marker|ocr|vlm|all) ;;
+  marker|ocr|layout|vlm|all) ;;
   *)
     echo "Invalid profile: $PROFILE" >&2
     usage
@@ -79,7 +80,7 @@ esac
 
 profiles=()
 if [[ "$PROFILE" == "all" ]]; then
-  profiles=(marker ocr vlm)
+  profiles=(marker ocr layout vlm)
 else
   profiles=("$PROFILE")
 fi
@@ -98,6 +99,10 @@ for profile in "${profiles[@]}"; do
     ocr)
       echo "Downloading PaddleOCR wheels into $WHEEL_DIR"
       python -m pip download -r "$REQ_DIR/paddleocr.txt" -d "$WHEEL_DIR"
+      ;;
+    layout)
+      echo "Downloading layout engine wheels into $WHEEL_DIR"
+      python -m pip download -r "$REQ_DIR/layout.txt" -d "$WHEEL_DIR"
       ;;
     vlm)
       echo "Downloading VLM wheels into $WHEEL_DIR"
@@ -153,6 +158,60 @@ if sample_image and Path(sample_image).exists():
         print(f"PP-Structure warmup failed: {exc}")
 else:
     print("PaddleOCR prefetch initialized (no sample image provided).")
+PY
+fi
+
+if [[ " ${profiles[*]} " == *" layout "* ]]; then
+  mkdir -p "$LAYOUT_DIR"
+  export BOOKMIND_LAYOUT_MODEL_DIR="$LAYOUT_DIR"
+  export FVCORE_CACHE="$LAYOUT_DIR"
+  export DETECTRON2_DATASETS="$LAYOUT_DIR"
+
+  python - <<'PY'
+import json
+import os
+from pathlib import Path
+
+layout_dir = Path(os.environ["BOOKMIND_LAYOUT_MODEL_DIR"])
+layout_dir.mkdir(parents=True, exist_ok=True)
+
+config_candidates = sorted(layout_dir.rglob("*.yaml")) + sorted(layout_dir.rglob("*.yml"))
+weight_candidates = sorted(layout_dir.rglob("*.pth")) + sorted(layout_dir.rglob("*.pkl"))
+
+if config_candidates and weight_candidates:
+    print(f"Layout assets already present at {layout_dir}")
+    raise SystemExit(0)
+
+try:
+    import layoutparser as lp
+except Exception as exc:
+    print(f"Unable to import layoutparser for layout prefetch: {exc}")
+    print("Install layout profile venv and rerun to prewarm PubLayNet assets.")
+    raise SystemExit(0)
+
+try:
+    lp.Detectron2LayoutModel(
+        config_path="lp://PubLayNet/faster_rcnn_R_50_FPN_3x/config",
+        label_map={0: "text", 1: "title", 2: "list", 3: "table", 4: "figure"},
+        extra_config=["MODEL.ROI_HEADS.SCORE_THRESH_TEST", 0.5],
+    )
+except Exception as exc:
+    print(f"Layout prefetch warmup failed: {exc}")
+    print(
+        "Place local Detectron2 PubLayNet config (.yaml) and weights (.pth) under "
+        f"{layout_dir} for offline layout runs."
+    )
+    raise SystemExit(0)
+
+config_candidates = sorted(layout_dir.rglob("*.yaml")) + sorted(layout_dir.rglob("*.yml"))
+weight_candidates = sorted(layout_dir.rglob("*.pth")) + sorted(layout_dir.rglob("*.pkl"))
+
+manifest = {
+    "config_files": [str(p) for p in config_candidates],
+    "weight_files": [str(p) for p in weight_candidates],
+}
+(layout_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+print(f"Layout prefetch complete at {layout_dir}")
 PY
 fi
 

@@ -134,6 +134,46 @@ Offline cache behavior:
   is populated via `scripts/prefetch_online.sh`.
 - You can override the cache directory with `BOOKMIND_PADDLEOCR_CACHE_DIR` or `--cache_dir`.
 
+## LayoutParser region-aware engine (PubLayNet + PaddleOCR crops)
+
+Command example:
+```
+python tools/bookmind_bench/run.py layout --imgdir bench_runs/images --out bench_runs
+```
+
+Output location:
+```
+<out>/layout/output.jsonl
+```
+
+Optional debug artifacts:
+```
+<out>/layout/crops/page_0001_region_001.png
+<out>/layout/layout_debug/page_0001.json
+```
+
+Output schema (multi-record JSONL):
+- `engine="layoutparser"` for all records.
+- `page` is 1-based.
+- `type` values:
+  - `layout_block`: one record per detected region (`text`, `table`, `figure`), with region bbox and detection metadata.
+  - `ocr_text`: OCR lines from cropped `text`/`table` regions, mapped back into page coordinates.
+  - `table_md`: reserved/optional (not emitted by default in this path).
+- `meta` always includes `pdf_page_start` and `pdf_page_end`.
+- `layout_block` records include:
+  - `meta.block_type` (`text`, `table`, `figure`)
+  - `meta.confidence` (optional detector score)
+  - `meta.region_id` (`page_0001_region_001` style)
+- `ocr_text` records include:
+  - `meta.block_type` (parent region type)
+  - `meta.trace.region_id` linking each line back to its region.
+
+Offline model behavior:
+- The layout model path defaults to:
+  - `tools/bookmind_bench/offline_bundle/models/layoutparser_publaynet`
+- Override with `--model_dir` or `BOOKMIND_LAYOUT_MODEL_DIR`.
+- Runtime avoids network; provide local Detectron2 config (`.yaml`) + weights (`.pth/.pkl`) in `model_dir`.
+
 ## VLM planning hook (figure captioning)
 
 Command example:

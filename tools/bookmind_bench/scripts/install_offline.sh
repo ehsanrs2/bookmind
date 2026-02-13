@@ -11,7 +11,7 @@ PROFILE="all"
 
 usage() {
   cat <<'EOF' >&2
-Usage: install_offline.sh --profile marker|ocr|vlm|all
+Usage: install_offline.sh --profile marker|ocr|layout|vlm|all
 EOF
 }
 
@@ -34,7 +34,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$PROFILE" in
-  marker|ocr|vlm|all) ;;
+  marker|ocr|layout|vlm|all) ;;
   *)
     echo "Invalid profile: $PROFILE" >&2
     usage
@@ -49,7 +49,7 @@ fi
 
 profiles=()
 if [[ "$PROFILE" == "all" ]]; then
-  profiles=(marker ocr vlm)
+  profiles=(marker ocr layout vlm)
 else
   profiles=("$PROFILE")
 fi
@@ -64,6 +64,7 @@ install_profile() {
   case "$profile" in
     marker) req_file="$REQ_DIR/marker.txt" ;;
     ocr) req_file="$REQ_DIR/paddleocr.txt" ;;
+    layout) req_file="$REQ_DIR/layout.txt" ;;
     vlm) req_file="$REQ_DIR/vlm.txt" ;;
   esac
 
@@ -97,6 +98,12 @@ if [[ " ${profiles[*]} " == *" marker "* ]]; then
   echo "  export MARKER_CACHE_DIR=\"$MODEL_DIR/marker\""
 fi
 if [[ " ${profiles[*]} " == *" ocr "* ]]; then
+  echo "  export PADDLEOCR_HOME=\"$MODEL_DIR/paddleocr\""
+  echo "  export PADDLE_HOME=\"$MODEL_DIR/paddleocr\""
+  echo "  export HOME=\"$MODEL_DIR/paddleocr\""
+fi
+if [[ " ${profiles[*]} " == *" layout "* ]]; then
+  echo "  export BOOKMIND_LAYOUT_MODEL_DIR=\"$MODEL_DIR/layoutparser_publaynet\""
   echo "  export PADDLEOCR_HOME=\"$MODEL_DIR/paddleocr\""
   echo "  export PADDLE_HOME=\"$MODEL_DIR/paddleocr\""
   echo "  export HOME=\"$MODEL_DIR/paddleocr\""

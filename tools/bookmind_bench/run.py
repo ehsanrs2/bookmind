@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 
 from engines.marker_engine import run_marker_pdf
+from engines.layout_engine import run_layoutparser
 from engines.paddleocr_engine import (
     list_page_images,
     run_paddleocr,
@@ -145,6 +146,48 @@ def _cmd_paddleocr(args: argparse.Namespace) -> int:
     output_path = out_dir / "paddleocr" / "output.jsonl"
     write_jsonl(output_path, records)
     print(f"PaddleOCR wrote {len(records)} block(s) to {output_path}")
+    return 0
+
+
+def _resolve_layout_model_dir(arg_value: str | None) -> str:
+    override = os.environ.get("BOOKMIND_LAYOUT_MODEL_DIR")
+    if override:
+        return override
+    if arg_value:
+        return arg_value
+    return str(
+        Path(__file__).resolve().parent
+        / "offline_bundle"
+        / "models"
+        / "layoutparser_publaynet"
+    )
+
+
+def _cmd_layout(args: argparse.Namespace) -> int:
+    img_dir = Path(args.imgdir)
+    out_dir = Path(args.out)
+
+    if not img_dir.exists():
+        raise SystemExit(f"Image directory not found: {img_dir}")
+
+    images = list_page_images(str(img_dir))
+    if not images:
+        raise SystemExit(f"No page images found in {img_dir}")
+
+    model_dir = _resolve_layout_model_dir(args.model_dir)
+    records = run_layoutparser(
+        img_dir=str(img_dir),
+        pages=None,
+        use_gpu=args.use_gpu,
+        model_dir=model_dir,
+        score_thresh=args.score_thresh,
+        max_regions_per_page=args.max_regions_per_page,
+        out_dir=str(out_dir),
+    )
+
+    output_path = out_dir / "layout" / "output.jsonl"
+    write_jsonl(output_path, records)
+    print(f"LayoutParser wrote {len(records)} record(s) to {output_path}")
     return 0
 
 
@@ -317,6 +360,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="Always run OCR-only fallback (det+rec) per page",
     )
     paddleocr.set_defaults(func=_cmd_paddleocr)
+
+    layout = subparsers.add_parser(
+        "layout",
+        help="Run region-aware LayoutParser + PaddleOCR on rendered page images",
+    )
+    layout.add_argument("--imgdir", required=True, help="Directory of PNG pages")
+    layout.add_argument("--out", required=True, help="Output directory for runs")
+    layout.add_argument(
+        "--use_gpu",
+        default=True,
+        type=lambda v: str(v).lower() in {"1", "true", "yes", "y"},
+        help="Enable GPU (default true)",
+    )
+    layout.add_argument(
+        "--model_dir",
+        required=False,
+        help=(
+            "Directory containing local LayoutParser PubLayNet config + weights "
+            "(defaults to offline bundle)"
+        ),
+    )
+    layout.add_argument(
+        "--score_thresh",
+        type=float,
+        default=0.5,
+        help="Layout detection score threshold (default 0.5)",
+    )
+    layout.add_argument(
+        "--max_regions_per_page",
+        type=int,
+        default=60,
+        help="Maximum number of detected regions per page (default 60)",
+    )
+    layout.set_defaults(func=_cmd_layout)
 
     paddleocr_smoke = subparsers.add_parser(
         "paddleocr-smoke", help=argparse.SUPPRESS

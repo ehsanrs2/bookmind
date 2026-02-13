@@ -12,7 +12,7 @@ PROFILE="all"
 
 usage() {
   cat <<'EOF' >&2
-Usage: verify_offline.sh --profile marker|ocr|vlm|all [--pdf /path/to/sample.pdf] [--image /path/to/sample.png]
+Usage: verify_offline.sh --profile marker|ocr|layout|vlm|all [--pdf /path/to/sample.pdf] [--image /path/to/sample.png]
 EOF
 }
 
@@ -43,7 +43,7 @@ while [[ $# -gt 0 ]]; do
  done
 
 case "$PROFILE" in
-  marker|ocr|vlm|all) ;;
+  marker|ocr|layout|vlm|all) ;;
   *)
     echo "Invalid profile: $PROFILE" >&2
     usage
@@ -53,7 +53,7 @@ esac
 
 profiles=()
 if [[ "$PROFILE" == "all" ]]; then
-  profiles=(marker ocr vlm)
+  profiles=(marker ocr layout vlm)
 else
   profiles=("$PROFILE")
 fi
@@ -127,6 +127,28 @@ for profile in "${profiles[@]}"; do
         python "$ROOT_DIR/tools/bookmind_bench/run.py" paddleocr-smoke --image "$SAMPLE_IMAGE"
       else
         echo "No --image provided; PaddleOCR smoke run skipped."
+      fi
+      ;;
+    layout)
+      ensure_cache_dir "$MODEL_DIR/layoutparser_publaynet" "LayoutParser PubLayNet"
+      ensure_cache_dir "$MODEL_DIR/paddleocr" "PaddleOCR"
+      export BOOKMIND_LAYOUT_MODEL_DIR="$MODEL_DIR/layoutparser_publaynet"
+      export PADDLEOCR_HOME="$MODEL_DIR/paddleocr"
+      export PADDLE_HOME="$MODEL_DIR/paddleocr"
+      export HOME="$MODEL_DIR/paddleocr"
+      python "$ROOT_DIR/tools/bookmind_bench/run.py" layout --help
+      if [[ -n "$SAMPLE_IMAGE" ]]; then
+        if [[ ! -f "$SAMPLE_IMAGE" ]]; then
+          echo "Sample image not found: $SAMPLE_IMAGE" >&2
+          exit 1
+        fi
+        TMP_DIR="$(mktemp -d)"
+        cp "$SAMPLE_IMAGE" "$TMP_DIR/page_0001.png"
+        OUT_DIR="$(mktemp -d)"
+        python "$ROOT_DIR/tools/bookmind_bench/run.py" layout --imgdir "$TMP_DIR" --out "$OUT_DIR" --max_regions_per_page 1
+        rm -rf "$TMP_DIR" "$OUT_DIR"
+      else
+        echo "No --image provided; layout smoke run skipped."
       fi
       ;;
     vlm)

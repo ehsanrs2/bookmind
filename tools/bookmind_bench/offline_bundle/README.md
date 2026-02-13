@@ -7,12 +7,14 @@ Contents:
 - `wheels/` — Python wheels downloaded by `scripts/prefetch_online.sh` (base + per-profile).
 - `models/marker/` — Marker cache directory.
 - `models/paddleocr/` — PaddleOCR/PP-Structure model cache.
+- `models/layoutparser_publaynet/` — LayoutParser/Detectron2 PubLayNet config + weights cache.
 - `models/qwen3_vl/4b` — Qwen3-VL 4B snapshot (default).
 - `models/qwen3_vl/8b_fp8` — Qwen3-VL 8B FP8 snapshot.
 
 Cache environment variables used by the scripts:
 - Marker: `XDG_CACHE_HOME` and `MARKER_CACHE_DIR` -> `models/marker/`
 - PaddleOCR: `PADDLEOCR_HOME`, `PADDLE_HOME`, and `HOME` -> `models/paddleocr/`
+- Layout engine: `BOOKMIND_LAYOUT_MODEL_DIR` -> `models/layoutparser_publaynet/`
 - Hugging Face: `HF_HOME`, `HF_HUB_CACHE`, and `TRANSFORMERS_CACHE` -> `models/qwen3_vl/*`
 
 Qwen3-VL overrides:
