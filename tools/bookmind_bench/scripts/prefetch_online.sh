@@ -11,6 +11,8 @@ MARKER_DIR="$MODEL_DIR/marker"
 PADDLE_DIR="$MODEL_DIR/paddleocr"
 LAYOUT_DIR="$MODEL_DIR/layoutparser_publaynet"
 QWEN_DIR_BASE="$MODEL_DIR/qwen3_vl"
+EMBED_DIR="$MODEL_DIR/embeddings"
+QDRANT_WHEEL_DIR="$WHEEL_DIR/qdrant"
 QWEN_4B_DIR_DEFAULT="$QWEN_DIR_BASE/4b"
 QWEN_8B_FP8_DIR_DEFAULT="$QWEN_DIR_BASE/8b_fp8"
 
@@ -27,7 +29,7 @@ QWEN_8B_FP8_DIR="${BOOKMIND_QWEN3_VL_8B_FP8_DIR:-$QWEN_8B_FP8_DIR_DEFAULT}"
 
 usage() {
   cat <<'EOF' >&2
-Usage: prefetch_online.sh --profile marker|ocr|layout|vlm|all [--sample-pdf /path.pdf] [--sample-image /path.png] [--qwen3vl 4b|8b_fp8|all]
+Usage: prefetch_online.sh --profile marker|ocr|layout|vlm|qdrant|all [--sample-pdf /path.pdf] [--sample-image /path.png] [--qwen3vl 4b|8b_fp8|all]
 EOF
 }
 
@@ -62,7 +64,7 @@ while [[ $# -gt 0 ]]; do
  done
 
 case "$PROFILE" in
-  marker|ocr|layout|vlm|all) ;;
+  marker|ocr|layout|vlm|qdrant|all) ;;
   *)
     echo "Invalid profile: $PROFILE" >&2
     usage
@@ -81,7 +83,7 @@ esac
 
 profiles=()
 if [[ "$PROFILE" == "all" ]]; then
-  profiles=(marker ocr layout vlm)
+  profiles=(marker ocr layout vlm qdrant)
 else
   profiles=("$PROFILE")
 fi
@@ -124,6 +126,11 @@ for profile in "${profiles[@]}"; do
     vlm)
       echo "Downloading VLM wheels into $WHEEL_DIR"
       python -m pip download -r "$REQ_DIR/vlm.txt" -d "$WHEEL_DIR"
+      ;;
+    qdrant)
+      mkdir -p "$QDRANT_WHEEL_DIR"
+      echo "Downloading Qdrant wheels into $QDRANT_WHEEL_DIR"
+      python -m pip download -r "$REQ_DIR/base.txt" -r "$REQ_DIR/qdrant.txt" -d "$QDRANT_WHEEL_DIR"
       ;;
   esac
 done
@@ -278,6 +285,28 @@ if [[ " ${profiles[*]} " == *" vlm "* ]]; then
   fi
   if [[ "$QWEN3VL" == "8b_fp8" || "$QWEN3VL" == "all" ]]; then
     download_qwen3vl "$MODEL_ID_8B_FP8" "$QWEN_8B_FP8_DIR"
+  fi
+fi
+
+if [[ " ${profiles[*]} " == *" qdrant "* ]]; then
+  EMBED_MODEL_ID_DEFAULT="sentence-transformers/all-MiniLM-L6-v2"
+  EMBED_MODEL_ID="${BOOKMIND_EMBED_MODEL_ID:-$EMBED_MODEL_ID_DEFAULT}"
+  EMBED_MODEL_DIR="${BOOKMIND_EMBED_MODEL_DIR:-$EMBED_DIR/all-MiniLM-L6-v2}"
+
+  "$ROOT_DIR/tools/bookmind_bench/scripts/create_venv.sh" --online --profile qdrant
+
+  mkdir -p "$EMBED_MODEL_DIR"
+  export HF_HOME="$EMBED_MODEL_DIR"
+  export HF_HUB_CACHE="$EMBED_MODEL_DIR"
+  export TRANSFORMERS_CACHE="$EMBED_MODEL_DIR"
+
+  if command -v huggingface-cli >/dev/null 2>&1; then
+    huggingface-cli download "$EMBED_MODEL_ID" --local-dir "$EMBED_MODEL_DIR" --local-dir-use-symlinks False
+  elif command -v hf >/dev/null 2>&1; then
+    hf download "$EMBED_MODEL_ID" --local-dir "$EMBED_MODEL_DIR"
+  else
+    echo "huggingface-cli (or hf) not found; install huggingface-hub before downloading embedding model." >&2
+    exit 1
   fi
 fi
 

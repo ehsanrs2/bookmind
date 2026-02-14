@@ -12,7 +12,7 @@ PROFILE="all"
 
 usage() {
   cat <<'EOF' >&2
-Usage: verify_offline.sh --profile marker|ocr|layout|vlm|all [--pdf /path/to/sample.pdf] [--image /path/to/sample.png]
+Usage: verify_offline.sh --profile marker|ocr|layout|vlm|qdrant|all [--pdf /path/to/sample.pdf] [--image /path/to/sample.png]
 EOF
 }
 
@@ -43,7 +43,7 @@ while [[ $# -gt 0 ]]; do
  done
 
 case "$PROFILE" in
-  marker|ocr|layout|vlm|all) ;;
+  marker|ocr|layout|vlm|qdrant|all) ;;
   *)
     echo "Invalid profile: $PROFILE" >&2
     usage
@@ -53,7 +53,7 @@ esac
 
 profiles=()
 if [[ "$PROFILE" == "all" ]]; then
-  profiles=(marker ocr layout vlm)
+  profiles=(marker ocr layout vlm qdrant)
 else
   profiles=("$PROFILE")
 fi
@@ -164,6 +164,26 @@ for profile in "${profiles[@]}"; do
       export HF_HOME="$VLM_DIR"
       export HF_HUB_CACHE="$VLM_DIR"
       export TRANSFORMERS_CACHE="$VLM_DIR"
+      ;;
+    qdrant)
+      EMBED_DIR_DEFAULT="$MODEL_DIR/embeddings/all-MiniLM-L6-v2"
+      EMBED_DIR="${BOOKMIND_EMBED_MODEL_DIR:-$EMBED_DIR_DEFAULT}"
+      ensure_cache_dir "$EMBED_DIR" "embedding model"
+      export HF_HOME="$EMBED_DIR"
+      export HF_HUB_CACHE="$EMBED_DIR"
+      export TRANSFORMERS_CACHE="$EMBED_DIR"
+      python -c "import qdrant_client; import sentence_transformers; print('OK imports')"
+      export BOOKMIND_VERIFY_EMBED_DIR="$EMBED_DIR"
+      python - <<'PY'
+import os
+from sentence_transformers import SentenceTransformer
+
+model = SentenceTransformer(os.environ["BOOKMIND_VERIFY_EMBED_DIR"])
+vec = model.encode(["offline smoke"], normalize_embeddings=True)
+assert len(vec) == 1
+assert len(vec[0]) > 0
+print("OK embedding smoke")
+PY
       ;;
   esac
 

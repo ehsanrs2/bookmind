@@ -6,13 +6,14 @@ REQ_DIR="$ROOT_DIR/tools/bookmind_bench/requirements"
 BUNDLE_DIR="$ROOT_DIR/tools/bookmind_bench/offline_bundle"
 WHEEL_DIR="$BUNDLE_DIR/wheels"
 LAYOUT_WHEEL_DIR="$WHEEL_DIR/layout"
+QDRANT_WHEEL_DIR="$WHEEL_DIR/qdrant"
 MODEL_DIR="$BUNDLE_DIR/models"
 
 PROFILE="all"
 
 usage() {
   cat <<'EOF' >&2
-Usage: install_offline.sh --profile marker|ocr|layout|vlm|all
+Usage: install_offline.sh --profile marker|ocr|layout|vlm|qdrant|all
 EOF
 }
 
@@ -35,7 +36,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$PROFILE" in
-  marker|ocr|layout|vlm|all) ;;
+  marker|ocr|layout|vlm|qdrant|all) ;;
   *)
     echo "Invalid profile: $PROFILE" >&2
     usage
@@ -50,7 +51,7 @@ fi
 
 profiles=()
 if [[ "$PROFILE" == "all" ]]; then
-  profiles=(marker ocr layout vlm)
+  profiles=(marker ocr layout vlm qdrant)
 else
   profiles=("$PROFILE")
 fi
@@ -82,6 +83,7 @@ install_profile() {
     ocr) req_file="$REQ_DIR/paddleocr.txt" ;;
     layout) req_file="$REQ_DIR/layout.txt" ;;
     vlm) req_file="$REQ_DIR/vlm.txt" ;;
+    qdrant) req_file="$REQ_DIR/qdrant.txt" ;;
   esac
 
   if [[ "$profile" == "layout" ]]; then
@@ -95,6 +97,13 @@ install_profile() {
     fi
     profile_pip_flags=(--no-index --find-links "$LAYOUT_WHEEL_DIR")
     python_bin="$(select_layout_python)"
+  fi
+  if [[ "$profile" == "qdrant" ]]; then
+    if [[ ! -d "$QDRANT_WHEEL_DIR" ]]; then
+      echo "Missing qdrant offline wheel bundle at $QDRANT_WHEEL_DIR" >&2
+      exit 1
+    fi
+    profile_pip_flags=(--no-index --find-links "$QDRANT_WHEEL_DIR")
   fi
 
   if [[ ! -d "$venv_dir" ]]; then
@@ -152,4 +161,11 @@ if [[ " ${profiles[*]} " == *" vlm "* ]]; then
   echo "  export HF_HOME=\"$MODEL_DIR/qwen3_vl/4b\""
   echo "  export HF_HUB_CACHE=\"$MODEL_DIR/qwen3_vl/4b\""
   echo "  export TRANSFORMERS_CACHE=\"$MODEL_DIR/qwen3_vl/4b\""
+fi
+if [[ " ${profiles[*]} " == *" qdrant "* ]]; then
+  echo "  export HF_HOME=\"$MODEL_DIR/embeddings/all-MiniLM-L6-v2\""
+  echo "  export HF_HUB_CACHE=\"$MODEL_DIR/embeddings/all-MiniLM-L6-v2\""
+  echo "  export TRANSFORMERS_CACHE=\"$MODEL_DIR/embeddings/all-MiniLM-L6-v2\""
+  echo "  export HF_HUB_OFFLINE=1"
+  echo "  export TRANSFORMERS_OFFLINE=1"
 fi

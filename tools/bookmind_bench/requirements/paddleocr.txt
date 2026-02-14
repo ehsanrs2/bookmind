@@ -2,4 +2,8 @@
 # NOTE: Newer PaddleOCR releases may attempt extra online init (model registry updates).
 # If offline init fails, keep this pinned combo or prewarm caches using prefetch_online.sh.
 paddleocr==2.7.3
-paddlepaddle-gpu==2.6.1.post112
+paddlepaddle-gpu==2.6.1
+numpy<2.0.0
+opencv-python<=4.6.0.66
+opencv-contrib-python<=4.6.0.66
+opencv-python-headless<=4.6.0.66

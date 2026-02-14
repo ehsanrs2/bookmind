@@ -1,2 +1,3 @@
 # Marker PDF CLI (provides marker_single).
-marker-pdf==0.2.10
+marker-pdf==1.10.2
+surya-ocr==0.17.1

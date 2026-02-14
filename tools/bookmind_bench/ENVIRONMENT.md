@@ -10,6 +10,7 @@ and let you ship an offline wheel + model bundle to air-gapped machines.
   - `.venv_bookmind_bench_ocr/`
   - `.venv_bookmind_bench_layout/`
   - `.venv_bookmind_bench_vlm/`
+  - `.venv_bookmind_bench_qdrant/`
 - Requirements: `tools/bookmind_bench/requirements/*.txt`
 - Offline bundle: `tools/bookmind_bench/offline_bundle/` (git-ignored)
 - PaddleOCR/PP-Structure must be installed in the bench venvs (not the app venv)
@@ -19,6 +20,7 @@ Profiles keep dependency stacks isolated:
 - `ocr`: base + PaddleOCR requirements
 - `layout`: base + LayoutParser + PaddleOCR requirements + local Detectron2 wheel
 - `vlm`: base + VLM requirements
+- `qdrant`: base + Qdrant client + sentence-transformers requirements
 - `dev`: optional dev tooling (`--dev`) installed into any chosen profile env
 
 Legacy note: `.venv_bookmind_bench/` is still accepted by scripts as a fallback,
@@ -61,7 +63,53 @@ variables to the local bundle paths.
 ./tools/bookmind_bench/scripts/create_venv.sh --offline --profile ocr
 ./tools/bookmind_bench/scripts/create_venv.sh --offline --profile layout
 ./tools/bookmind_bench/scripts/create_venv.sh --online --profile vlm --dev
+./tools/bookmind_bench/scripts/create_venv.sh --offline --profile qdrant
 ```
+
+## Qdrant ingestion (offline)
+Embedding model default: `sentence-transformers/all-MiniLM-L6-v2` (384-dim, small SBERT for technical English).
+
+Optional local Qdrant service:
+```bash
+docker run --rm -p 6333:6333 -v qdrant_storage:/qdrant/storage qdrant/qdrant
+```
+
+Prepare offline assets for qdrant profile (online machine):
+```bash
+./tools/bookmind_bench/scripts/prefetch_online.sh --profile qdrant
+```
+
+This stores:
+- wheels in `tools/bookmind_bench/offline_bundle/wheels/qdrant/`
+- embedding snapshot in `tools/bookmind_bench/offline_bundle/models/embeddings/all-MiniLM-L6-v2/`
+
+Ingest a run bundle into Qdrant:
+```bash
+python tools/bookmind_bench/run.py bundle --out <RUN_DIR>
+python tools/bookmind_bench/run.py qdrant-ingest --run <RUN_DIR> \
+  --qdrant_url http://127.0.0.1:6333 \
+  --collection bookmind_bench
+```
+
+Search:
+```bash
+python tools/bookmind_bench/run.py qdrant-search \
+  --query "phase diagram calibration conditions" \
+  --qdrant_url http://127.0.0.1:6333 \
+  --collection bookmind_bench \
+  --top_k 10
+```
+
+Optional type filter:
+```bash
+python tools/bookmind_bench/run.py qdrant-search --query "..." --content_types text,table
+```
+
+Offline flags and model lookup:
+- set `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`
+- default local embedding path:
+  `tools/bookmind_bench/offline_bundle/models/embeddings/all-MiniLM-L6-v2`
+- override with `--embed_model /path/to/local/model` when needed.
 
 ## Offline verification
 ```bash

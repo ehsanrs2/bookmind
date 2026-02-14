@@ -7,6 +7,7 @@ REQ_DIR="$ROOT_DIR/tools/bookmind_bench/requirements"
 BUNDLE_DIR="$ROOT_DIR/tools/bookmind_bench/offline_bundle"
 WHEEL_DIR="$BUNDLE_DIR/wheels"
 LAYOUT_WHEEL_DIR="$WHEEL_DIR/layout"
+QDRANT_WHEEL_DIR="$WHEEL_DIR/qdrant"
 
 MODE="online"
 PROFILE="all"
@@ -14,10 +15,11 @@ INSTALL_DEV=0
 
 usage() {
   cat <<'EOF' >&2
-Usage: create_venv.sh [--online|--offline|--mode online|offline] --profile marker|ocr|layout|vlm|all [--dev]
+Usage: create_venv.sh [--online|--offline|--mode online|offline] --profile marker|ocr|layout|vlm|qdrant|all [--dev]
 Examples:
   create_venv.sh --online --profile ocr
   create_venv.sh --online --profile layout
+  create_venv.sh --online --profile qdrant
   create_venv.sh --offline --profile marker
   create_venv.sh --online --profile all --dev
 EOF
@@ -67,7 +69,7 @@ case "$MODE" in
 esac
 
 case "$PROFILE" in
-  marker|ocr|layout|vlm|all) ;;
+  marker|ocr|layout|vlm|qdrant|all) ;;
   *)
     echo "Invalid profile: $PROFILE" >&2
     usage
@@ -103,7 +105,7 @@ select_layout_python() {
 
 profiles=()
 if [[ "$PROFILE" == "all" ]]; then
-  profiles=(marker ocr layout vlm)
+  profiles=(marker ocr layout vlm qdrant)
 else
   profiles=("$PROFILE")
 fi
@@ -120,6 +122,7 @@ create_profile_env() {
     ocr) req_file="$REQ_DIR/paddleocr.txt" ;;
     layout) req_file="$REQ_DIR/layout.txt" ;;
     vlm) req_file="$REQ_DIR/vlm.txt" ;;
+    qdrant) req_file="$REQ_DIR/qdrant.txt" ;;
   esac
 
   if [[ "$profile" == "layout" ]]; then
@@ -131,6 +134,13 @@ create_profile_env() {
       fi
       profile_pip_flags=(--no-index --find-links "$LAYOUT_WHEEL_DIR")
     fi
+  fi
+  if [[ "$profile" == "qdrant" && "$MODE" == "offline" ]]; then
+    if [[ ! -d "$QDRANT_WHEEL_DIR" ]]; then
+      echo "Missing qdrant wheel bundle at $QDRANT_WHEEL_DIR" >&2
+      exit 1
+    fi
+    profile_pip_flags=(--no-index --find-links "$QDRANT_WHEEL_DIR")
   fi
 
   if [[ ! -d "$venv_dir" ]]; then

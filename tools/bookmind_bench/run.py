@@ -24,6 +24,11 @@ from engines.vlm_caption_engine import (
 from engines.vlm_hook import plan_vlm_jobs
 from bundle import bundle_run
 from merge import merge_outputs
+from qdrant_ingest import (
+    DEFAULT_EMBED_ALIAS,
+    ingest_bundle,
+    search_query,
+)
 from render_pdf import parse_pages, render_pdf_pages
 
 
@@ -39,6 +44,10 @@ def _load_local_io() -> object:
 
 _io = _load_local_io()
 write_jsonl = _io.write_jsonl
+
+
+def _parse_bool(value: object) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
 
 
 def _cmd_render(args: argparse.Namespace) -> int:
@@ -378,6 +387,73 @@ def _cmd_bundle(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_content_types(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [item.strip() for item in str(value).split(",") if item.strip()]
+
+
+def _cmd_qdrant_ingest(args: argparse.Namespace) -> int:
+    bundle_dir = Path(args.bundle_dir) if args.bundle_dir else Path(args.run) / "bundle"
+    if not bundle_dir.exists():
+        raise SystemExit(f"Bundle directory not found: {bundle_dir}")
+
+    stats = ingest_bundle(
+        bundle_dir=str(bundle_dir),
+        qdrant_url=args.qdrant_url,
+        collection=args.collection,
+        embed_model=args.embed_model,
+        recreate=args.recreate,
+        batch_size=args.batch_size,
+        timeout_s=args.timeout_s,
+    )
+    print(
+        f"Qdrant ingest complete: collection={stats['collection']} "
+        f"ingested={stats['records_ingested']} total={stats['records_total']} "
+        f"skipped_missing_id={stats['records_skipped_missing_id']}"
+    )
+    return 0
+
+
+def _cmd_qdrant_search(args: argparse.Namespace) -> int:
+    content_types = _parse_content_types(args.content_types)
+    results = search_query(
+        query=args.query,
+        qdrant_url=args.qdrant_url,
+        collection=args.collection,
+        embed_model=args.embed_model,
+        top_k=args.top_k,
+        timeout_s=args.timeout_s,
+        content_types=content_types if content_types else None,
+    )
+
+    if not results:
+        print("No results.")
+        return 0
+
+    for idx, row in enumerate(results, start=1):
+        score = float(row.get("score") or 0.0)
+        text = str(row.get("text") or "").replace("\n", " ").strip()
+        preview = text[:160]
+        if len(text) > 160:
+            preview += "..."
+        print(
+            f"{idx:02d}. score={score:.4f} page={row.get('page')} "
+            f"type={row.get('content_type')} text={preview}"
+        )
+
+        if row.get("content_type") == "figure_caption":
+            meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
+            figure_ref = (
+                meta.get("figure_ref") if isinstance(meta.get("figure_ref"), dict) else {}
+            )
+            crop = figure_ref.get("crop_image")
+            page_img = figure_ref.get("page_image")
+            if crop or page_img:
+                print(f"    figure_ref crop_image={crop} page_image={page_img}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bookmind-bench",
@@ -420,7 +496,7 @@ def build_parser() -> argparse.ArgumentParser:
     paddleocr.add_argument(
         "--use_gpu",
         default=True,
-        type=lambda v: str(v).lower() in {"1", "true", "yes", "y"},
+        type=_parse_bool,
         help="Enable GPU (default true)",
     )
     paddleocr.add_argument(
@@ -454,7 +530,7 @@ def build_parser() -> argparse.ArgumentParser:
     layout.add_argument(
         "--use_gpu",
         default=True,
-        type=lambda v: str(v).lower() in {"1", "true", "yes", "y"},
+        type=_parse_bool,
         help="Enable GPU (default true)",
     )
     layout.add_argument(
@@ -487,7 +563,7 @@ def build_parser() -> argparse.ArgumentParser:
     paddleocr_smoke.add_argument(
         "--use_gpu",
         default=True,
-        type=lambda v: str(v).lower() in {"1", "true", "yes", "y"},
+        type=_parse_bool,
         help="Enable GPU (default true)",
     )
     paddleocr_smoke.add_argument(
@@ -552,7 +628,7 @@ def build_parser() -> argparse.ArgumentParser:
     vlm.add_argument(
         "--use_ocr_hints",
         default=True,
-        type=lambda v: str(v).lower() in {"1", "true", "yes", "y"},
+        type=_parse_bool,
         help="Include OCR hints in the prompt (default true)",
     )
     vlm.add_argument(
@@ -683,10 +759,100 @@ def build_parser() -> argparse.ArgumentParser:
     bundle.add_argument(
         "--include_images",
         default=False,
-        type=lambda v: str(v).lower() in {"1", "true", "yes", "y"},
+        type=_parse_bool,
         help="Copy figure page/crop images into bundle/images (default false)",
     )
     bundle.set_defaults(func=_cmd_bundle)
+
+    qdrant_ingest = subparsers.add_parser(
+        "qdrant-ingest",
+        help="Ingest bundle records.jsonl into a local Qdrant vector store",
+    )
+    qdrant_ingest.add_argument("--run", required=True, help="Run directory")
+    qdrant_ingest.add_argument(
+        "--bundle_dir",
+        required=False,
+        help="Bundle directory (default <run>/bundle)",
+    )
+    qdrant_ingest.add_argument(
+        "--qdrant_url",
+        default="http://127.0.0.1:6333",
+        help="Qdrant HTTP URL (default http://127.0.0.1:6333)",
+    )
+    qdrant_ingest.add_argument(
+        "--collection",
+        default="bookmind_bench",
+        help="Qdrant collection name (default bookmind_bench)",
+    )
+    qdrant_ingest.add_argument(
+        "--embed_model",
+        default=DEFAULT_EMBED_ALIAS,
+        help=(
+            "Embedding model id or local path (default all-MiniLM-L6-v2 alias for "
+            "sentence-transformers/all-MiniLM-L6-v2)"
+        ),
+    )
+    qdrant_ingest.add_argument(
+        "--recreate",
+        default=False,
+        type=_parse_bool,
+        help="Drop and recreate collection before ingest (default false)",
+    )
+    qdrant_ingest.add_argument(
+        "--batch_size",
+        type=int,
+        default=64,
+        help="Embedding/upsert batch size (default 64)",
+    )
+    qdrant_ingest.add_argument(
+        "--timeout_s",
+        type=int,
+        default=60,
+        help="Qdrant HTTP timeout in seconds (default 60)",
+    )
+    qdrant_ingest.set_defaults(func=_cmd_qdrant_ingest)
+
+    qdrant_search = subparsers.add_parser(
+        "qdrant-search",
+        help="Semantic search against Qdrant-ingested bench records",
+    )
+    qdrant_search.add_argument("--query", required=True, help="Search query text")
+    qdrant_search.add_argument(
+        "--qdrant_url",
+        default="http://127.0.0.1:6333",
+        help="Qdrant HTTP URL (default http://127.0.0.1:6333)",
+    )
+    qdrant_search.add_argument(
+        "--collection",
+        default="bookmind_bench",
+        help="Qdrant collection name (default bookmind_bench)",
+    )
+    qdrant_search.add_argument(
+        "--embed_model",
+        default=DEFAULT_EMBED_ALIAS,
+        help=(
+            "Embedding model id or local path (default all-MiniLM-L6-v2 alias for "
+            "sentence-transformers/all-MiniLM-L6-v2)"
+        ),
+    )
+    qdrant_search.add_argument(
+        "--top_k",
+        type=int,
+        default=10,
+        help="Number of hits to return (default 10)",
+    )
+    qdrant_search.add_argument(
+        "--content_types",
+        required=False,
+        help="Optional comma-separated filter: text,table,figure_caption",
+    )
+    qdrant_search.add_argument(
+        "--timeout_s",
+        type=int,
+        default=30,
+        help="Qdrant HTTP timeout in seconds (default 30)",
+    )
+    qdrant_search.set_defaults(func=_cmd_qdrant_search)
 
     return parser
 
