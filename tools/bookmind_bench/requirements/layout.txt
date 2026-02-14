@@ -1,8 +1,6 @@
-# LayoutParser + Detectron2 region detector stack (bench-only profile).
+# LayoutParser region detector stack (bench-only profile).
 # Keep this isolated from app/runtime deps.
 layoutparser==0.3.4
-# Detectron2 0.6 is the stable baseline used by LayoutParser Detectron2 backend.
-detectron2==0.6
 torch==2.2.2
 torchvision==0.17.2
 # OCR on detected text/table crops.

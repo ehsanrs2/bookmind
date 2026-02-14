@@ -5,6 +5,7 @@ This directory holds the offline wheelhouse and model caches required by
 
 Contents:
 - `wheels/` — Python wheels downloaded by `scripts/prefetch_online.sh` (base + per-profile).
+- `wheels/layout/` — layout profile wheelhouse, including prebuilt Detectron2 wheel from source.
 - `models/marker/` — Marker cache directory.
 - `models/paddleocr/` — PaddleOCR/PP-Structure model cache.
 - `models/layoutparser_publaynet/` — LayoutParser/Detectron2 PubLayNet config + weights cache.
@@ -28,3 +29,16 @@ For air-gapped vLLM usage, point vLLM to the local model path:
 
 The bundle contents are intentionally git-ignored. Keep this folder alongside
 this repo when transferring to an offline machine.
+
+## Layout profile (Detectron2 from source)
+- Requires `.venv_bookmind_bench_layout` with Python 3.10/3.11.
+- Online prefetch builds Detectron2 from a pinned git commit and saves the
+  wheel to `wheels/layout/`.
+- Offline install consumes only `wheels/layout/` for layout dependencies.
+
+Commands:
+```bash
+./tools/bookmind_bench/scripts/prefetch_online.sh --profile layout --sample-image /path/to/sample.png
+./tools/bookmind_bench/scripts/install_offline.sh --profile layout
+./tools/bookmind_bench/scripts/verify_offline.sh --profile layout --image /path/to/sample.png
+```

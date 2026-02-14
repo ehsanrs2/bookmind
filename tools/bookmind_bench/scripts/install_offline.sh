@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 REQ_DIR="$ROOT_DIR/tools/bookmind_bench/requirements"
 BUNDLE_DIR="$ROOT_DIR/tools/bookmind_bench/offline_bundle"
 WHEEL_DIR="$BUNDLE_DIR/wheels"
+LAYOUT_WHEEL_DIR="$WHEEL_DIR/layout"
 MODEL_DIR="$BUNDLE_DIR/models"
 
 PROFILE="all"
@@ -56,10 +57,25 @@ fi
 
 PIP_FLAGS=(--no-index --find-links "$WHEEL_DIR")
 
+select_layout_python() {
+  if command -v python3.10 >/dev/null 2>&1; then
+    echo "python3.10"
+    return 0
+  fi
+  if command -v python3.11 >/dev/null 2>&1; then
+    echo "python3.11"
+    return 0
+  fi
+  echo "Layout profile requires python3.10 or python3.11. Install one of them and retry." >&2
+  exit 1
+}
+
 install_profile() {
   local profile="$1"
   local venv_dir="$ROOT_DIR/.venv_bookmind_bench_${profile}"
   local req_file=""
+  local profile_pip_flags=("${PIP_FLAGS[@]}")
+  local python_bin="python3"
 
   case "$profile" in
     marker) req_file="$REQ_DIR/marker.txt" ;;
@@ -68,15 +84,35 @@ install_profile() {
     vlm) req_file="$REQ_DIR/vlm.txt" ;;
   esac
 
+  if [[ "$profile" == "layout" ]]; then
+    if [[ ! -d "$LAYOUT_WHEEL_DIR" ]]; then
+      echo "Missing layout offline wheel bundle at $LAYOUT_WHEEL_DIR" >&2
+      exit 1
+    fi
+    profile_pip_flags=(--no-index --find-links "$LAYOUT_WHEEL_DIR")
+    python_bin="$(select_layout_python)"
+  fi
+
   if [[ ! -d "$venv_dir" ]]; then
-    python3 -m venv "$venv_dir"
+    "$python_bin" -m venv "$venv_dir"
   fi
 
   # shellcheck disable=SC1091
   source "$venv_dir/bin/activate"
-  python -m pip install "${PIP_FLAGS[@]}" --upgrade pip setuptools wheel
-  python -m pip install "${PIP_FLAGS[@]}" -r "$REQ_DIR/base.txt"
-  python -m pip install "${PIP_FLAGS[@]}" -r "$req_file"
+  if [[ "$profile" == "layout" ]]; then
+    layout_py_minor="$(python -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')"
+    if [[ "$layout_py_minor" != "3.10" && "$layout_py_minor" != "3.11" ]]; then
+      deactivate || true
+      echo "Layout venv at $venv_dir uses Python $layout_py_minor; recreate with python3.10 or python3.11." >&2
+      exit 1
+    fi
+  fi
+  python -m pip install "${profile_pip_flags[@]}" --upgrade pip setuptools wheel
+  python -m pip install "${profile_pip_flags[@]}" -r "$REQ_DIR/base.txt"
+  python -m pip install "${profile_pip_flags[@]}" -r "$req_file"
+  if [[ "$profile" == "layout" ]]; then
+    python -m pip install "${profile_pip_flags[@]}" detectron2
+  fi
   if [[ "$profile" == "vlm" ]]; then
     if python -m pip show vllm-flash-attn >/dev/null 2>&1; then
       python -m pip uninstall -y vllm-flash-attn

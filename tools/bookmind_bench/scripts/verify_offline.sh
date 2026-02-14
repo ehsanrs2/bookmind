@@ -136,6 +136,7 @@ for profile in "${profiles[@]}"; do
       export PADDLEOCR_HOME="$MODEL_DIR/paddleocr"
       export PADDLE_HOME="$MODEL_DIR/paddleocr"
       export HOME="$MODEL_DIR/paddleocr"
+      python -c "import detectron2; import layoutparser"
       python "$ROOT_DIR/tools/bookmind_bench/run.py" layout --help
       if [[ -n "$SAMPLE_IMAGE" ]]; then
         if [[ ! -f "$SAMPLE_IMAGE" ]]; then

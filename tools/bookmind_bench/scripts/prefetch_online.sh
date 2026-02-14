@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 REQ_DIR="$ROOT_DIR/tools/bookmind_bench/requirements"
 BUNDLE_DIR="$ROOT_DIR/tools/bookmind_bench/offline_bundle"
 WHEEL_DIR="$BUNDLE_DIR/wheels"
+LAYOUT_WHEEL_DIR="$WHEEL_DIR/layout"
 MODEL_DIR="$BUNDLE_DIR/models"
 MARKER_DIR="$MODEL_DIR/marker"
 PADDLE_DIR="$MODEL_DIR/paddleocr"
@@ -100,10 +101,6 @@ for profile in "${profiles[@]}"; do
       echo "Downloading PaddleOCR wheels into $WHEEL_DIR"
       python -m pip download -r "$REQ_DIR/paddleocr.txt" -d "$WHEEL_DIR"
       ;;
-    layout)
-      echo "Downloading layout engine wheels into $WHEEL_DIR"
-      python -m pip download -r "$REQ_DIR/layout.txt" -d "$WHEEL_DIR"
-      ;;
     vlm)
       echo "Downloading VLM wheels into $WHEEL_DIR"
       python -m pip download -r "$REQ_DIR/vlm.txt" -d "$WHEEL_DIR"
@@ -162,6 +159,21 @@ PY
 fi
 
 if [[ " ${profiles[*]} " == *" layout "* ]]; then
+  mkdir -p "$LAYOUT_WHEEL_DIR"
+
+  "$ROOT_DIR/tools/bookmind_bench/scripts/create_venv.sh" --online --profile layout
+  # shellcheck disable=SC1091
+  source "$ROOT_DIR/.venv_bookmind_bench_layout/bin/activate"
+
+  python -m pip install --upgrade pip setuptools wheel
+  python -m pip install -r "$REQ_DIR/base.txt"
+  python -m pip install -r "$REQ_DIR/layout.txt"
+
+  "$ROOT_DIR/tools/bookmind_bench/scripts/build_detectron2_wheel.sh"
+  python -m pip install --no-index --find-links "$LAYOUT_WHEEL_DIR" detectron2
+  python -m pip download -d "$LAYOUT_WHEEL_DIR" -r "$REQ_DIR/base.txt" -r "$REQ_DIR/layout.txt"
+  python -m pip download -d "$LAYOUT_WHEEL_DIR" --find-links "$LAYOUT_WHEEL_DIR" detectron2
+
   mkdir -p "$LAYOUT_DIR"
   export BOOKMIND_LAYOUT_MODEL_DIR="$LAYOUT_DIR"
   export FVCORE_CACHE="$LAYOUT_DIR"
@@ -213,6 +225,7 @@ manifest = {
 (layout_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 print(f"Layout prefetch complete at {layout_dir}")
 PY
+  deactivate || true
 fi
 
 if [[ " ${profiles[*]} " == *" vlm "* ]]; then

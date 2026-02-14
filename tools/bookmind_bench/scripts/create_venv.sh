@@ -6,6 +6,7 @@ LEGACY_VENV_DIR="$ROOT_DIR/.venv_bookmind_bench"
 REQ_DIR="$ROOT_DIR/tools/bookmind_bench/requirements"
 BUNDLE_DIR="$ROOT_DIR/tools/bookmind_bench/offline_bundle"
 WHEEL_DIR="$BUNDLE_DIR/wheels"
+LAYOUT_WHEEL_DIR="$WHEEL_DIR/layout"
 
 MODE="online"
 PROFILE="all"
@@ -87,6 +88,19 @@ fi
 PADDLE_GPU_VERSION="${PADDLE_GPU_VERSION:-3.3.0}"
 PADDLE_CUDA_INDEX="${PADDLE_CUDA_INDEX:-}"
 
+select_layout_python() {
+  if command -v python3.10 >/dev/null 2>&1; then
+    echo "python3.10"
+    return 0
+  fi
+  if command -v python3.11 >/dev/null 2>&1; then
+    echo "python3.11"
+    return 0
+  fi
+  echo "Layout profile requires python3.10 or python3.11. Install one of them and retry." >&2
+  exit 1
+}
+
 profiles=()
 if [[ "$PROFILE" == "all" ]]; then
   profiles=(marker ocr layout vlm)
@@ -98,6 +112,8 @@ create_profile_env() {
   local profile="$1"
   local venv_dir="$ROOT_DIR/.venv_bookmind_bench_${profile}"
   local req_file=""
+  local profile_pip_flags=("${PIP_FLAGS[@]}")
+  local python_bin="python3"
 
   case "$profile" in
     marker) req_file="$REQ_DIR/marker.txt" ;;
@@ -106,16 +122,39 @@ create_profile_env() {
     vlm) req_file="$REQ_DIR/vlm.txt" ;;
   esac
 
+  if [[ "$profile" == "layout" ]]; then
+    python_bin="$(select_layout_python)"
+    if [[ "$MODE" == "offline" ]]; then
+      if [[ ! -d "$LAYOUT_WHEEL_DIR" ]]; then
+        echo "Missing layout wheel bundle at $LAYOUT_WHEEL_DIR" >&2
+        exit 1
+      fi
+      profile_pip_flags=(--no-index --find-links "$LAYOUT_WHEEL_DIR")
+    fi
+  fi
+
   if [[ ! -d "$venv_dir" ]]; then
-    python3 -m venv "$venv_dir"
+    "$python_bin" -m venv "$venv_dir"
   fi
 
   # shellcheck disable=SC1091
   source "$venv_dir/bin/activate"
 
-  python -m pip install "${PIP_FLAGS[@]}" --upgrade pip setuptools wheel
-  python -m pip install "${PIP_FLAGS[@]}" -r "$REQ_DIR/base.txt"
-  python -m pip install "${PIP_FLAGS[@]}" -r "$req_file"
+  if [[ "$profile" == "layout" ]]; then
+    layout_py_minor="$(python -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')"
+    if [[ "$layout_py_minor" != "3.10" && "$layout_py_minor" != "3.11" ]]; then
+      deactivate || true
+      echo "Layout venv at $venv_dir uses Python $layout_py_minor; recreate with python3.10 or python3.11." >&2
+      exit 1
+    fi
+  fi
+
+  python -m pip install "${profile_pip_flags[@]}" --upgrade pip setuptools wheel
+  python -m pip install "${profile_pip_flags[@]}" -r "$REQ_DIR/base.txt"
+  python -m pip install "${profile_pip_flags[@]}" -r "$req_file"
+  if [[ "$profile" == "layout" && "$MODE" == "offline" ]]; then
+    python -m pip install "${profile_pip_flags[@]}" detectron2
+  fi
 
   if [[ "$INSTALL_DEV" -eq 1 ]]; then
     python -m pip install "${PIP_FLAGS[@]}" -r "$REQ_DIR/dev.txt"

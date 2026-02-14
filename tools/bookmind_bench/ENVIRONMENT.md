@@ -17,7 +17,7 @@ and let you ship an offline wheel + model bundle to air-gapped machines.
 Profiles keep dependency stacks isolated:
 - `marker`: base + marker requirements
 - `ocr`: base + PaddleOCR requirements
-- `layout`: base + LayoutParser/Detectron2 + PaddleOCR requirements
+- `layout`: base + LayoutParser + PaddleOCR requirements + local Detectron2 wheel
 - `vlm`: base + VLM requirements
 - `dev`: optional dev tooling (`--dev`) installed into any chosen profile env
 
@@ -73,6 +73,31 @@ variables to the local bundle paths.
 This enforces offline flags (HF/Transformers) and runs the CLI help commands.
 For `--profile layout`, a one-page layout smoke run is performed when `--image`
 is provided.
+
+## Layout profile (Detectron2 from source)
+- Layout venv must use Python `3.10` (preferred) or `3.11`.
+- `prefetch_online.sh --profile layout` now:
+  - creates `.venv_bookmind_bench_layout` with Python 3.10/3.11
+  - installs layout requirements (without Detectron2 from PyPI)
+  - builds a pinned Detectron2 wheel from source
+  - stores wheels under `tools/bookmind_bench/offline_bundle/wheels/layout/`
+- `install_offline.sh --profile layout` installs strictly from
+  `offline_bundle/wheels/layout/` (including Detectron2).
+
+Online prefetch (layout):
+```bash
+./tools/bookmind_bench/scripts/prefetch_online.sh --profile layout --sample-image /path/to/sample.png
+```
+
+Offline install (layout):
+```bash
+./tools/bookmind_bench/scripts/install_offline.sh --profile layout
+```
+
+Offline verify (layout):
+```bash
+./tools/bookmind_bench/scripts/verify_offline.sh --profile layout --image /path/to/sample.png
+```
 
 ## Qwen3-VL (vLLM) workflow
 Online prefetch into the offline bundle (default 4B snapshot):
