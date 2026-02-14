@@ -244,6 +244,39 @@ OCR hints behavior:
   whose bbox intersects the figure bbox (IoU > 0.01).
 - Hints are truncated to keep prompts compact (default 800 chars, 30 items).
 
+## VLM caption runner from layout output (`vlm-layout`)
+
+Command example:
+```
+python tools/bookmind_bench/run.py vlm-layout --imgdir bench_runs/images --out bench_runs
+```
+
+Command with explicit layout JSON and crop resize cap:
+```
+python tools/bookmind_bench/run.py vlm-layout --layout_json bench_runs/layout/output.jsonl --imgdir bench_runs/images --out bench_runs --limit_image_size 384
+```
+
+Input:
+- Layout JSONL (default `<out>/layout/output.jsonl`)
+- Page images in `--imgdir` (resolved by page number, e.g. `page_0001.png`)
+
+Selection and hinting behavior:
+- Only `layout_block` rows where `meta.block_type == "figure"` are captioned.
+- Crop bbox is the figure `layout_block` bbox.
+- OCR hints priority:
+  - First: `ocr_text` rows with `meta.trace.region_id == figure.meta.region_id`.
+  - Fallback: nearest page-level `ocr_text` rows, capped by `--ocr_hint_max_chars`.
+
+Output location:
+```
+<out>/vlm/output.jsonl
+```
+
+Output schema additions:
+- Same `figure_caption` schema as `vlm`, with trace metadata from layout:
+  - `meta.trace.layout_region_id`
+  - `meta.trace.layout_line_id` (line number in layout JSONL)
+
 ## Merge output (ingest_record)
 
 This is a bench-only normalization step that prepares artifacts for later
@@ -257,6 +290,11 @@ python tools/bookmind_bench/run.py merge --out <run_dir>
 Input defaults:
 - PaddleOCR: `<run_dir>/paddleocr/output.jsonl`
 - VLM (optional): `<run_dir>/vlm/output.jsonl` when present
+
+Layout-aware input:
+- You can pass LayoutParser output via `--paddle <run_dir>/layout/output.jsonl`.
+- `ocr_text` rows from layout are emitted as `content_type="text"` with their `bbox`.
+- Layout text trace is preserved: `meta.trace.region_id`.
 
 Output location:
 ```
@@ -289,5 +327,5 @@ Field notes:
 - `stable_id`: deterministic ID from `sha1(f"{page}|{type}|{bbox_norm}|{text_norm}")[:16]`.
 - `content_type`: one of `text`, `table`, `figure_caption`.
 - `bbox`: rounded integer bbox `[x0, y0, x1, y1]` or `null`.
-- `source_engines`: `["paddleocr"]` for text/tables and `["paddleocr","vlm"]` for matched figure captions.
+- `source_engines`: derived from source JSONL engine for text/tables (for example `["paddleocr"]` or `["layoutparser"]`) and `[<source_engine>, "vlm"]` for matched figure captions.
 - Figure-caption matching is page-aware and uses exact bbox first, then coordinate tolerance (`--bbox-tol`), then IoU fallback (`--iou`).

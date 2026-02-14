@@ -154,9 +154,19 @@ def _build_ingest_record(
     confidence: Optional[float],
     paddle_line_ids: List[int],
     vlm_line_id: Optional[int],
+    trace_region_id: Optional[str] = None,
+    trace_layout_line_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     text_norm = _norm_text(text)
     bbox_norm = _bbox_to_ints(bbox)
+    trace: Dict[str, Any] = {
+        "paddleocr_line_ids": paddle_line_ids,
+        "vlm_line_id": vlm_line_id,
+    }
+    if trace_region_id is not None:
+        trace["region_id"] = trace_region_id
+    if trace_layout_line_id is not None:
+        trace["layout_line_id"] = trace_layout_line_id
     return {
         "stable_id": _stable_id(page=page, content_type=content_type, bbox=bbox, text=text_norm),
         "page": page,
@@ -169,10 +179,7 @@ def _build_ingest_record(
             "source_engines": source_engines,
             "block_type": block_type,
             "confidence": confidence,
-            "trace": {
-                "paddleocr_line_ids": paddle_line_ids,
-                "vlm_line_id": vlm_line_id,
-            },
+            "trace": trace,
         },
     }
 
@@ -206,6 +213,9 @@ def merge_outputs(
                     "line_id": line_id,
                     "bbox": bbox,
                     "text": text,
+                    "trace": row.get("meta", {}).get("trace")
+                    if isinstance(row.get("meta"), dict)
+                    else None,
                     "confidence": row.get("meta", {}).get("confidence")
                     if isinstance(row.get("meta"), dict)
                     else None,
@@ -222,8 +232,11 @@ def merge_outputs(
         text = _norm_text(row.get("text"))
         bbox = _normalize_bbox(row.get("bbox"))
         meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
+        trace = meta.get("trace") if isinstance(meta.get("trace"), dict) else {}
         block_type = meta.get("block_type")
         confidence = meta.get("confidence")
+        engine_name = str(row.get("engine") or "paddleocr")
+        trace_region_id = trace.get("region_id")
 
         if not isinstance(page, int):
             continue
@@ -236,11 +249,12 @@ def merge_outputs(
                 content_type="text",
                 text=text,
                 bbox=bbox,
-                source_engines=["paddleocr"],
+                source_engines=[engine_name],
                 block_type=block_type or "text",
                 confidence=float(confidence) if isinstance(confidence, (int, float)) else None,
                 paddle_line_ids=[line_id],
                 vlm_line_id=None,
+                trace_region_id=str(trace_region_id) if trace_region_id is not None else None,
             )
             out_rows.append(record)
             emitted_by_type["text"] += 1
@@ -254,7 +268,7 @@ def merge_outputs(
                 content_type="table",
                 text=text,
                 bbox=bbox,
-                source_engines=["paddleocr"],
+                source_engines=[engine_name],
                 block_type=block_type or "table",
                 confidence=float(confidence) if isinstance(confidence, (int, float)) else None,
                 paddle_line_ids=[line_id],
@@ -277,18 +291,28 @@ def merge_outputs(
             if match is None:
                 continue
             candidates.remove(match)
+            match_trace = match.get("trace") if isinstance(match.get("trace"), dict) else {}
+            match_layout_line_id = (
+                int(match_trace["layout_line_id"])
+                if isinstance(match_trace.get("layout_line_id"), int)
+                else None
+            )
             record = _build_ingest_record(
                 page=page,
                 content_type="figure_caption",
                 text=match["text"],
                 bbox=bbox,
-                source_engines=["paddleocr", "vlm"],
+                source_engines=[engine_name, "vlm"],
                 block_type="figure",
                 confidence=float(match["confidence"])
                 if isinstance(match.get("confidence"), (int, float))
                 else (float(confidence) if isinstance(confidence, (int, float)) else None),
                 paddle_line_ids=[line_id],
                 vlm_line_id=int(match["line_id"]),
+                trace_region_id=str(meta.get("region_id"))
+                if meta.get("region_id") is not None
+                else None,
+                trace_layout_line_id=match_layout_line_id,
             )
             out_rows.append(record)
             emitted_by_type["figure_caption"] += 1

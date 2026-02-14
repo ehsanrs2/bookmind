@@ -14,7 +14,7 @@ from engines.paddleocr_engine import (
     run_paddleocr,
     run_paddleocr_on_image,
 )
-from engines.vlm_caption_engine import run_vlm_caption_jobs
+from engines.vlm_caption_engine import run_vlm_caption_jobs, run_vlm_layout
 from engines.vlm_hook import plan_vlm_jobs
 from merge import merge_outputs
 from render_pdf import parse_pages, render_pdf_pages
@@ -258,6 +258,37 @@ def _cmd_vlm(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_vlm_layout(args: argparse.Namespace) -> int:
+    out_dir = Path(args.out)
+    layout_path = (
+        Path(args.layout_json)
+        if args.layout_json
+        else out_dir / "layout" / "output.jsonl"
+    )
+    img_dir = Path(args.imgdir)
+
+    if not layout_path.exists():
+        raise SystemExit(f"Layout JSONL not found: {layout_path}")
+    if not img_dir.exists():
+        raise SystemExit(f"Image directory not found: {img_dir}")
+
+    written = run_vlm_layout(
+        layout_jsonl=str(layout_path),
+        imgdir=str(img_dir),
+        out_dir=str(out_dir),
+        endpoint=args.endpoint,
+        model=args.model,
+        max_tokens=args.max_tokens,
+        temperature=args.temperature,
+        ocr_hint_max_chars=args.ocr_hint_max_chars,
+        prompt_template=args.prompt_template,
+        limit_image_size=args.limit_image_size,
+    )
+    output_path = out_dir / "vlm" / "output.jsonl"
+    print(f"VLM layout wrote {written} caption(s) to {output_path}")
+    return 0
+
+
 def _cmd_merge(args: argparse.Namespace) -> int:
     out_dir = Path(args.out)
 
@@ -468,6 +499,58 @@ def build_parser() -> argparse.ArgumentParser:
         help="Sampling temperature (default 0.2)",
     )
     vlm.set_defaults(func=_cmd_vlm)
+
+    vlm_layout = subparsers.add_parser(
+        "vlm-layout",
+        help="Caption figure regions directly from LayoutParser output with local VLM",
+    )
+    vlm_layout.add_argument(
+        "--layout_json",
+        required=False,
+        help="Path to layout output JSONL (default <out>/layout/output.jsonl)",
+    )
+    vlm_layout.add_argument("--imgdir", required=True, help="Directory of PNG pages")
+    vlm_layout.add_argument("--out", required=True, help="Output directory for runs")
+    vlm_layout.add_argument(
+        "--endpoint",
+        default="http://127.0.0.1:8000/v1",
+        help="Local OpenAI-compatible VLM endpoint (default http://127.0.0.1:8000/v1)",
+    )
+    vlm_layout.add_argument(
+        "--model",
+        default=os.environ.get("BOOKMIND_VLM_MODEL", "qwen3-vl"),
+        help="Model name for the VLM endpoint (default env BOOKMIND_VLM_MODEL or qwen3-vl)",
+    )
+    vlm_layout.add_argument(
+        "--max_tokens",
+        type=int,
+        default=256,
+        help="Max tokens to generate (default 256)",
+    )
+    vlm_layout.add_argument(
+        "--temperature",
+        type=float,
+        default=0.2,
+        help="Sampling temperature (default 0.2)",
+    )
+    vlm_layout.add_argument(
+        "--ocr_hint_max_chars",
+        type=int,
+        default=800,
+        help="Max OCR hint characters in prompt (default 800)",
+    )
+    vlm_layout.add_argument(
+        "--prompt_template",
+        default="technical_diagram_v1",
+        help="Prompt template id (default technical_diagram_v1)",
+    )
+    vlm_layout.add_argument(
+        "--limit_image_size",
+        type=int,
+        required=False,
+        help="Optional max crop side length in pixels (e.g. 384)",
+    )
+    vlm_layout.set_defaults(func=_cmd_vlm_layout)
 
     merge = subparsers.add_parser(
         "merge", help="Merge PaddleOCR + optional VLM outputs into ingest JSONL"

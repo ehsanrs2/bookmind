@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from engines.crop_utils import crop_image
+from engines.layout_engine import list_page_images
+from PIL import Image
 
 
 DEFAULT_ENDPOINT = "http://127.0.0.1:8000/v1"
@@ -29,6 +31,7 @@ DEFAULT_TEMPERATURE = 0.2
 class OcrBlock:
     bbox: List[float]
     text: str
+    region_id: Optional[str] = None
 
 
 def _read_jsonl(path: Path) -> Iterator[Dict[str, Any]]:
@@ -38,6 +41,17 @@ def _read_jsonl(path: Path) -> Iterator[Dict[str, Any]]:
             if not line:
                 continue
             yield json.loads(line)
+
+
+def _read_jsonl_with_line_ids(path: Path) -> Iterator[Tuple[int, Dict[str, Any]]]:
+    with path.open("r", encoding="utf-8") as handle:
+        for line_id, line in enumerate(handle, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            if isinstance(row, dict):
+                yield line_id, row
 
 
 def _append_jsonl(path: Path, row: Dict[str, Any]) -> None:
@@ -99,9 +113,99 @@ def _load_ocr_blocks(paddleocr_jsonl: Optional[Path]) -> Dict[int, List[OcrBlock
         if not isinstance(bbox, list) or text is None:
             continue
         ocr_by_page.setdefault(page, []).append(
-            OcrBlock(bbox=[float(v) for v in bbox], text=str(text))
+            OcrBlock(bbox=[float(v) for v in bbox], text=str(text), region_id=None)
         )
     return ocr_by_page
+
+
+def _extract_region_id(row: Dict[str, Any]) -> Optional[str]:
+    meta = row.get("meta")
+    if not isinstance(meta, dict):
+        return None
+    trace = meta.get("trace")
+    if isinstance(trace, dict):
+        rid = trace.get("region_id")
+        if rid is not None:
+            return str(rid)
+    rid = meta.get("region_id")
+    if rid is None:
+        return None
+    return str(rid)
+
+
+def _load_layout_ocr_blocks(layout_jsonl: Path) -> Dict[int, List[OcrBlock]]:
+    ocr_by_page: Dict[int, List[OcrBlock]] = {}
+    for _, row in _read_jsonl_with_line_ids(layout_jsonl):
+        if row.get("type") != "ocr_text":
+            continue
+        page = row.get("page")
+        bbox = row.get("bbox")
+        text = row.get("text")
+        if not isinstance(page, int):
+            continue
+        if not isinstance(bbox, list) or text is None:
+            continue
+        ocr_by_page.setdefault(page, []).append(
+            OcrBlock(
+                bbox=[float(v) for v in bbox],
+                text=str(text),
+                region_id=_extract_region_id(row),
+            )
+        )
+    return ocr_by_page
+
+
+def _select_nearby_page_hints(
+    figure_bbox: Iterable[float],
+    blocks: Iterable[OcrBlock],
+    max_chars: int = DEFAULT_OCR_MAX_CHARS,
+) -> str:
+    fbox = _normalize_bbox(figure_bbox)
+    fx = (fbox[0] + fbox[2]) / 2.0
+    fy = (fbox[1] + fbox[3]) / 2.0
+    scored: List[Tuple[float, str]] = []
+    for block in blocks:
+        text = " ".join(block.text.strip().split())
+        if not text:
+            continue
+        b = _normalize_bbox(block.bbox)
+        bx = (b[0] + b[2]) / 2.0
+        by = (b[1] + b[3]) / 2.0
+        dist2 = (bx - fx) ** 2 + (by - fy) ** 2
+        scored.append((dist2, text))
+
+    if not scored:
+        return ""
+
+    scored.sort(key=lambda item: item[0])
+    chunks: List[str] = []
+    used = 0
+    for _, text in scored:
+        sep = 2 if chunks else 0
+        if used + sep + len(text) > max_chars:
+            break
+        if sep:
+            used += sep
+        chunks.append(text)
+        used += len(text)
+    return "; ".join(chunks)
+
+
+def _join_hint_texts(blocks: Iterable[OcrBlock], max_chars: int) -> str:
+    chunks: List[str] = []
+    used = 0
+    for block in blocks:
+        text = " ".join(block.text.strip().split())
+        if not text:
+            continue
+        sep = 2 if chunks else 0
+        if used + sep + len(text) > max_chars:
+            break
+        if sep:
+            used += sep
+        chunks.append(text)
+        used += len(text)
+    return "; ".join(chunks)
 
 
 def _select_ocr_hints(
@@ -203,6 +307,155 @@ def _build_payload(
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
+
+
+def _resize_crop(path: Path, max_side: int) -> None:
+    if max_side <= 0:
+        return
+    with Image.open(path) as image:
+        width, height = image.size
+        longest = max(width, height)
+        if longest <= max_side:
+            return
+        scale = float(max_side) / float(longest)
+        new_size = (max(1, int(round(width * scale))), max(1, int(round(height * scale))))
+        resized = image.resize(new_size)
+        resized.save(path, format="PNG")
+
+
+def _resolve_page_image_map(imgdir: Path) -> Dict[int, Path]:
+    return {page: path for page, path in list_page_images(str(imgdir))}
+
+
+def run_vlm_layout(
+    *,
+    layout_jsonl: str,
+    imgdir: str,
+    out_dir: str,
+    endpoint: str = DEFAULT_ENDPOINT,
+    model: Optional[str] = None,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    temperature: float = DEFAULT_TEMPERATURE,
+    ocr_hint_max_chars: int = DEFAULT_OCR_MAX_CHARS,
+    prompt_template: str = DEFAULT_PROMPT_TEMPLATE,
+    limit_image_size: Optional[int] = None,
+) -> int:
+    layout_path = Path(layout_jsonl)
+    imgdir_path = Path(imgdir)
+    out_dir_path = Path(out_dir)
+    if not layout_path.exists():
+        raise SystemExit(f"Layout JSONL not found: {layout_path}")
+    if not imgdir_path.exists():
+        raise SystemExit(f"Image directory not found: {imgdir_path}")
+
+    if model is None:
+        model = os.environ.get("BOOKMIND_VLM_MODEL", DEFAULT_MODEL)
+
+    image_map = _resolve_page_image_map(imgdir_path)
+    ocr_index = _load_layout_ocr_blocks(layout_path)
+    out_path = out_dir_path / "vlm" / "output.jsonl"
+
+    written = 0
+    for line_id, row in _read_jsonl_with_line_ids(layout_path):
+        if row.get("type") != "layout_block":
+            continue
+        page = row.get("page")
+        bbox = row.get("bbox")
+        meta = row.get("meta")
+        if not isinstance(meta, dict):
+            continue
+        if str(meta.get("block_type", "")).lower() != "figure":
+            continue
+        if not isinstance(page, int) or not isinstance(bbox, list):
+            continue
+        image_path = image_map.get(page)
+        if image_path is None:
+            continue
+
+        region_id = _extract_region_id(row)
+        crop_path = out_dir_path / "vlm" / "crops" / f"page_{page:04d}_line_{line_id:05d}.png"
+        try:
+            crop_image(str(image_path), bbox, str(crop_path), pad_px=12)
+            if limit_image_size is not None:
+                _resize_crop(crop_path, int(limit_image_size))
+        except Exception as exc:  # noqa: BLE001
+            print(f"[vlm-layout] Warning: failed to crop line {line_id} ({exc}); skipping")
+            continue
+
+        page_blocks = ocr_index.get(page, [])
+        region_blocks = (
+            [block for block in page_blocks if region_id and block.region_id == region_id]
+            if region_id
+            else []
+        )
+        ocr_hints = ""
+        used_region_hints = False
+        if region_blocks:
+            ocr_hints = _join_hint_texts(region_blocks, ocr_hint_max_chars)
+            used_region_hints = bool(ocr_hints)
+        if not ocr_hints:
+            ocr_hints = _select_nearby_page_hints(
+                bbox,
+                page_blocks,
+                max_chars=ocr_hint_max_chars,
+            )
+
+        prompt = _build_prompt(prompt_template, ocr_hints)
+        start = time.perf_counter()
+        try:
+            payload = _build_payload(
+                model,
+                prompt,
+                crop_path,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            response = _post_chat_completion(endpoint, payload)
+            caption = _extract_caption(response)
+        except urllib.error.HTTPError as exc:
+            body = ""
+            try:
+                body = exc.read().decode("utf-8", "ignore")
+            except Exception:  # noqa: BLE001
+                body = ""
+            print(
+                f"[vlm-layout] Warning: line {line_id} failed (HTTP {exc.code}: {body}); skipping"
+            )
+            continue
+        except urllib.error.URLError as exc:
+            raise SystemExit(
+                f"VLM endpoint unreachable at {endpoint}. Start vLLM with OpenAI-compatible API."
+            ) from exc
+        except Exception as exc:  # noqa: BLE001
+            print(f"[vlm-layout] Warning: line {line_id} failed ({exc}); skipping")
+            continue
+        elapsed_ms = int(round((time.perf_counter() - start) * 1000))
+
+        record = {
+            "engine": "vlm",
+            "page": page,
+            "type": "figure_caption",
+            "text": caption,
+            "bbox": bbox,
+            "timing_ms": elapsed_ms,
+            "meta": {
+                "pdf_page_start": row.get("meta", {}).get("pdf_page_start", page),
+                "pdf_page_end": row.get("meta", {}).get("pdf_page_end", page),
+                "prompt_template": prompt_template,
+                "model": model,
+                "job_index": written + 1,
+                "used_ocr_hints": bool(ocr_hints),
+                "used_region_hints": used_region_hints,
+                "trace": {
+                    "layout_region_id": region_id,
+                    "layout_line_id": line_id,
+                },
+            },
+        }
+        _append_jsonl(out_path, record)
+        written += 1
+
+    return written
 
 
 def run_vlm_caption_jobs(
