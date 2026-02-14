@@ -24,6 +24,7 @@ from engines.vlm_caption_engine import (
 from engines.vlm_hook import plan_vlm_jobs
 from engines.vlm_providers import build_vlm_provider
 from bundle import bundle_run
+from eval_pack import load_queries, run_eval, write_reports
 from merge import merge_outputs
 from qdrant_ingest import (
     DEFAULT_EMBED_ALIAS,
@@ -497,6 +498,56 @@ def _cmd_rag_preview(args: argparse.Namespace) -> int:
             show_snippets=bool(args.show_snippets),
         ),
         end="",
+    )
+    return 0
+
+
+def _cmd_eval(args: argparse.Namespace) -> int:
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    queries = load_queries(args.queries)
+    backend_cfg = {
+        "backend": args.backend,
+        "endpoint": args.endpoint,
+        "model": args.model,
+        "ollama_url": args.ollama_url,
+        "ollama_model": args.ollama_model,
+    }
+    retrieval_cfg = {
+        "top_k": args.top_k,
+        "content_types": _parse_content_types(args.content_types),
+        "max_context_chars": args.max_context_chars,
+        "heuristic_boost_figures": args.heuristic_boost_figures,
+        "embed_model": args.embed_model,
+        "timeout_s": args.timeout_s,
+    }
+    gen_cfg = {
+        "max_tokens": args.max_tokens,
+        "temperature": args.temperature,
+    }
+
+    results = run_eval(
+        queries=queries,
+        qdrant_url=args.qdrant_url,
+        collection=args.collection,
+        backend_cfg=backend_cfg,
+        retrieval_cfg=retrieval_cfg,
+        gen_cfg=gen_cfg,
+        output_dir=out_dir,
+    )
+    write_reports(results, out_dir)
+
+    report_md = out_dir / "report.md"
+    summary = results.get("summary") if isinstance(results.get("summary"), dict) else {}
+    count_queries = summary.get("count_queries", 0)
+    avg_total_ms = summary.get("avg_total_ms", 0)
+    avg_num_citations = summary.get("avg_num_citations", 0)
+
+    print(f"Evaluation report: {report_md}")
+    print(
+        f"summary queries={count_queries} avg_total_ms={avg_total_ms} "
+        f"avg_num_citations={avg_num_citations}"
     )
     return 0
 
@@ -992,6 +1043,99 @@ def build_parser() -> argparse.ArgumentParser:
         help="Qdrant HTTP timeout in seconds (default 30)",
     )
     rag_preview.set_defaults(func=_cmd_rag_preview)
+
+    eval_cmd = subparsers.add_parser(
+        "eval",
+        help="Run multi-query offline RAG evaluation pack and write report artifacts",
+    )
+    eval_cmd.add_argument("--queries", required=True, help="Path to query JSON/YAML file")
+    eval_cmd.add_argument("--out", required=True, help="Output directory for report artifacts")
+    eval_cmd.add_argument(
+        "--qdrant_url",
+        default="http://127.0.0.1:6333",
+        help="Qdrant HTTP URL (default http://127.0.0.1:6333)",
+    )
+    eval_cmd.add_argument(
+        "--collection",
+        default="bookmind_bench",
+        help="Qdrant collection name (default bookmind_bench)",
+    )
+    eval_cmd.add_argument(
+        "--embed_model",
+        default=DEFAULT_EMBED_ALIAS,
+        help=(
+            "Embedding model id or local path (default all-MiniLM-L6-v2 alias for "
+            "sentence-transformers/all-MiniLM-L6-v2)"
+        ),
+    )
+    eval_cmd.add_argument(
+        "--top_k",
+        type=int,
+        default=8,
+        help="Number of retrieved chunks per query (default 8)",
+    )
+    eval_cmd.add_argument(
+        "--content_types",
+        required=False,
+        help="Optional comma-separated retrieval filter: text,table,figure_caption",
+    )
+    eval_cmd.add_argument(
+        "--max_context_chars",
+        type=int,
+        default=6000,
+        help="Maximum context characters for generation input (default 6000)",
+    )
+    eval_cmd.add_argument(
+        "--heuristic_boost_figures",
+        default=True,
+        type=_parse_bool,
+        help="Boost figure_caption items for figure-centric queries (default true)",
+    )
+    eval_cmd.add_argument(
+        "--backend",
+        choices=["vllm", "ollama"],
+        default="ollama",
+        help="Generation backend (default ollama)",
+    )
+    eval_cmd.add_argument(
+        "--endpoint",
+        default="http://127.0.0.1:8000/v1",
+        help="OpenAI-compatible endpoint for --backend vllm (default http://127.0.0.1:8000/v1)",
+    )
+    eval_cmd.add_argument(
+        "--model",
+        default="qwen3-vl",
+        help="Model name for --backend vllm (default qwen3-vl)",
+    )
+    eval_cmd.add_argument(
+        "--ollama_url",
+        default=DEFAULT_OLLAMA_URL,
+        help=f"Ollama URL for --backend ollama (default {DEFAULT_OLLAMA_URL})",
+    )
+    eval_cmd.add_argument(
+        "--ollama_model",
+        default=DEFAULT_OLLAMA_MODEL,
+        help=f"Ollama model for --backend ollama (default {DEFAULT_OLLAMA_MODEL})",
+    )
+    eval_cmd.add_argument(
+        "--max_tokens",
+        type=int,
+        default=512,
+        help="Max generation tokens (default 512)",
+    )
+    eval_cmd.add_argument(
+        "--temperature",
+        type=float,
+        default=0.2,
+        help="Sampling temperature (default 0.2)",
+    )
+    eval_cmd.add_argument(
+        "--timeout_s",
+        type=int,
+        default=30,
+        help="Qdrant HTTP timeout in seconds (default 30)",
+    )
+    eval_cmd.set_defaults(func=_cmd_eval)
 
     return parser
 

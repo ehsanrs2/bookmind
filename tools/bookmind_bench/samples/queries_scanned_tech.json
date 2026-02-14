@@ -1,0 +1,34 @@
+[
+  {
+    "id": "q1_title_scope",
+    "query": "What is the title or main subject of this document?"
+  },
+  {
+    "id": "q2_overview",
+    "query": "Summarize the system overview in 3 concise bullet points."
+  },
+  {
+    "id": "q3_parts_list",
+    "query": "List the key components or parts mentioned for the setup."
+  },
+  {
+    "id": "q4_pin_assignments",
+    "query": "Are there any pin assignments or connector mappings in the text or tables?"
+  },
+  {
+    "id": "q5_table_values",
+    "query": "Extract any table-style values, limits, or parameter settings if present."
+  },
+  {
+    "id": "q6_block_diagram",
+    "query": "Explain the block diagram and how the modules connect."
+  },
+  {
+    "id": "q7_circuit_wiring",
+    "query": "Describe the circuit wiring and signal flow shown in the figure."
+  },
+  {
+    "id": "q8_calibration_figure",
+    "query": "From the figure or schematic, what calibration steps are illustrated?"
+  }
+]

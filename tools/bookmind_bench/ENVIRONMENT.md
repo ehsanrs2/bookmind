@@ -147,6 +147,61 @@ Notes:
 - Use `--max_context_chars` to bound prompt context size.
 - Use `--show_snippets true` to print retrieved snippet previews in the output.
 
+## Evaluation pack (offline, weakly supervised)
+Use the evaluation harness to run repeatable multi-query RAG checks and compare
+configurations (OCR/layout pipelines, retrieval limits, and backend variants).
+
+Input query set:
+- built-in sample: `tools/bookmind_bench/samples/queries_scanned_tech.json`
+- schema per query:
+  - `{"id":"q1","query":"...","notes":"optional","expected_pages":[2,3]}`
+  - `expected_pages` is optional; when present it enables `hit@k_pages`.
+
+Example after ingesting a run (for example `/tmp/bookmind_layout_run`):
+```bash
+python tools/bookmind_bench/run.py eval \
+  --queries tools/bookmind_bench/samples/queries_scanned_tech.json \
+  --out /tmp/bookmind_layout_run/eval_ollama \
+  --qdrant_url http://127.0.0.1:6333 \
+  --collection bookmind_bench \
+  --backend ollama \
+  --ollama_url http://127.0.0.1:11434 \
+  --ollama_model qwen3-vl:latest \
+  --top_k 8 \
+  --max_context_chars 6000 \
+  --content_types text,table,figure_caption
+```
+
+vLLM variant:
+```bash
+python tools/bookmind_bench/run.py eval \
+  --queries tools/bookmind_bench/samples/queries_scanned_tech.json \
+  --out /tmp/bookmind_layout_run/eval_vllm \
+  --qdrant_url http://127.0.0.1:6333 \
+  --collection bookmind_bench \
+  --backend vllm \
+  --endpoint http://127.0.0.1:8000/v1 \
+  --model qwen3-vl \
+  --top_k 12 \
+  --max_context_chars 8000
+```
+
+Output artifacts:
+- `eval/report.json`: full run metadata + per-query outputs + metrics
+- `eval/report.md`: concise summary with per-query bullets, slowest queries,
+  and lowest-citation queries
+- `eval/items/<query-id>.json`: per-query artifact for diffs/regressions
+
+Heuristic note:
+- `--heuristic_boost_figures true` (default) moves `figure_caption` retrievals
+  earlier when query text suggests diagrams (`figure`, `diagram`, `schematic`,
+  `block diagram`, `circuit`, `wiring`).
+
+Why weakly supervised:
+- No gold answers are required.
+- Metrics focus on health signals: latency, citation presence/rate, retrieved ids,
+  answer length, and optional page-hit checks via `expected_pages`.
+
 Offline flags and model lookup:
 - set `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`
 - default local embedding path:
