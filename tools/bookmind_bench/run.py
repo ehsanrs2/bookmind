@@ -22,12 +22,19 @@ from engines.vlm_caption_engine import (
     run_vlm_layout,
 )
 from engines.vlm_hook import plan_vlm_jobs
+from engines.vlm_providers import build_vlm_provider
 from bundle import bundle_run
 from merge import merge_outputs
 from qdrant_ingest import (
     DEFAULT_EMBED_ALIAS,
     ingest_bundle,
     search_query,
+)
+from rag_preview import (
+    build_context,
+    build_rag_messages,
+    format_preview_output,
+    generate_answer,
 )
 from render_pdf import parse_pages, render_pdf_pages
 
@@ -454,6 +461,46 @@ def _cmd_qdrant_search(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_rag_preview(args: argparse.Namespace) -> int:
+    content_types = _parse_content_types(args.content_types)
+    results = search_query(
+        query=args.query,
+        qdrant_url=args.qdrant_url,
+        collection=args.collection,
+        embed_model=args.embed_model,
+        top_k=args.top_k,
+        timeout_s=args.timeout_s,
+        content_types=content_types if content_types else None,
+    )
+
+    context_payload = build_context(results, max_chars=args.max_context_chars)
+    context_text = str(context_payload.get("context_text") or "")
+    citations = context_payload.get("citations") if isinstance(context_payload.get("citations"), list) else []
+    messages = build_rag_messages(args.query, context_text)
+    provider = build_vlm_provider(
+        backend=args.backend,
+        endpoint=args.endpoint,
+        model=args.model,
+        ollama_url=args.ollama_url,
+        ollama_model=args.ollama_model,
+    )
+    answer_text, _usage = generate_answer(
+        provider=provider,
+        messages=messages,
+        max_tokens=args.max_tokens,
+        temperature=args.temperature,
+    )
+    print(
+        format_preview_output(
+            answer_text=answer_text,
+            citations=citations,
+            show_snippets=bool(args.show_snippets),
+        ),
+        end="",
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bookmind-bench",
@@ -853,6 +900,98 @@ def build_parser() -> argparse.ArgumentParser:
         help="Qdrant HTTP timeout in seconds (default 30)",
     )
     qdrant_search.set_defaults(func=_cmd_qdrant_search)
+
+    rag_preview = subparsers.add_parser(
+        "rag-preview",
+        help="Retrieve from Qdrant + generate a citation-aware answer with local backend",
+    )
+    rag_preview.add_argument("--query", required=True, help="RAG query text")
+    rag_preview.add_argument(
+        "--qdrant_url",
+        default="http://127.0.0.1:6333",
+        help="Qdrant HTTP URL (default http://127.0.0.1:6333)",
+    )
+    rag_preview.add_argument(
+        "--collection",
+        default="bookmind_bench",
+        help="Qdrant collection name (default bookmind_bench)",
+    )
+    rag_preview.add_argument(
+        "--embed_model",
+        default=DEFAULT_EMBED_ALIAS,
+        help=(
+            "Embedding model id or local path (default all-MiniLM-L6-v2 alias for "
+            "sentence-transformers/all-MiniLM-L6-v2)"
+        ),
+    )
+    rag_preview.add_argument(
+        "--top_k",
+        type=int,
+        default=8,
+        help="Number of retrieved chunks (default 8)",
+    )
+    rag_preview.add_argument(
+        "--content_types",
+        required=False,
+        help="Optional comma-separated filter: text,table,figure_caption",
+    )
+    rag_preview.add_argument(
+        "--max_context_chars",
+        type=int,
+        default=6000,
+        help="Maximum total context characters (default 6000)",
+    )
+    rag_preview.add_argument(
+        "--backend",
+        choices=["vllm", "ollama"],
+        default="ollama",
+        help="Generation backend (default ollama)",
+    )
+    rag_preview.add_argument(
+        "--endpoint",
+        default="http://127.0.0.1:8000/v1",
+        help="OpenAI-compatible endpoint for --backend vllm (default http://127.0.0.1:8000/v1)",
+    )
+    rag_preview.add_argument(
+        "--model",
+        default="qwen3-vl",
+        help="Model name for --backend vllm (default qwen3-vl)",
+    )
+    rag_preview.add_argument(
+        "--ollama_url",
+        default=DEFAULT_OLLAMA_URL,
+        help=f"Ollama URL for --backend ollama (default {DEFAULT_OLLAMA_URL})",
+    )
+    rag_preview.add_argument(
+        "--ollama_model",
+        default=DEFAULT_OLLAMA_MODEL,
+        help=f"Ollama model for --backend ollama (default {DEFAULT_OLLAMA_MODEL})",
+    )
+    rag_preview.add_argument(
+        "--max_tokens",
+        type=int,
+        default=512,
+        help="Max generation tokens (default 512)",
+    )
+    rag_preview.add_argument(
+        "--temperature",
+        type=float,
+        default=0.2,
+        help="Sampling temperature (default 0.2)",
+    )
+    rag_preview.add_argument(
+        "--show_snippets",
+        default=False,
+        type=_parse_bool,
+        help="Include retrieved snippets in output (default false)",
+    )
+    rag_preview.add_argument(
+        "--timeout_s",
+        type=int,
+        default=30,
+        help="Qdrant HTTP timeout in seconds (default 30)",
+    )
+    rag_preview.set_defaults(func=_cmd_rag_preview)
 
     return parser
 

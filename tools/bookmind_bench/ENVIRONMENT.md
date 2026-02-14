@@ -105,6 +105,48 @@ Optional type filter:
 python tools/bookmind_bench/run.py qdrant-search --query "..." --content_types text,table
 ```
 
+## RAG preview (offline)
+1) Build bundle and ingest into Qdrant:
+```bash
+python tools/bookmind_bench/run.py bundle --out <RUN_DIR>
+python tools/bookmind_bench/run.py qdrant-ingest --run <RUN_DIR> \
+  --qdrant_url http://127.0.0.1:6333 \
+  --collection bookmind_bench
+```
+
+2) Start Qdrant (optional local Docker):
+```bash
+docker run --rm -p 6333:6333 -v qdrant_storage:/qdrant/storage qdrant/qdrant
+```
+
+3) Run RAG preview with Ollama backend (default):
+```bash
+python tools/bookmind_bench/run.py rag-preview \
+  --query "Summarize the calibration setup" \
+  --qdrant_url http://127.0.0.1:6333 \
+  --collection bookmind_bench \
+  --backend ollama \
+  --ollama_url http://127.0.0.1:11434 \
+  --ollama_model qwen3-vl:latest
+```
+
+4) Run RAG preview with vLLM OpenAI-compatible backend:
+```bash
+python tools/bookmind_bench/run.py rag-preview \
+  --query "Summarize the calibration setup" \
+  --qdrant_url http://127.0.0.1:6333 \
+  --collection bookmind_bench \
+  --backend vllm \
+  --endpoint http://127.0.0.1:8000/v1 \
+  --model qwen3-vl
+```
+
+Notes:
+- Answers are instructed to cite as `[page:stable_id]`.
+- Use `--content_types text,table,figure_caption` to filter retrieval scope.
+- Use `--max_context_chars` to bound prompt context size.
+- Use `--show_snippets true` to print retrieved snippet previews in the output.
+
 Offline flags and model lookup:
 - set `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`
 - default local embedding path:
