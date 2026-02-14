@@ -89,6 +89,10 @@ install_profile() {
       echo "Missing layout offline wheel bundle at $LAYOUT_WHEEL_DIR" >&2
       exit 1
     fi
+    if ! ls "$LAYOUT_WHEEL_DIR"/detectron2-*.whl >/dev/null 2>&1; then
+      echo "Missing detectron2 wheel in $LAYOUT_WHEEL_DIR. Run prefetch_online.sh --profile layout on a network-enabled machine first." >&2
+      exit 1
+    fi
     profile_pip_flags=(--no-index --find-links "$LAYOUT_WHEEL_DIR")
     python_bin="$(select_layout_python)"
   fi

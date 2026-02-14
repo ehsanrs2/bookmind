@@ -84,6 +84,16 @@ is provided.
 - `install_offline.sh --profile layout` installs strictly from
   `offline_bundle/wheels/layout/` (including Detectron2).
 
+System prerequisites for layout (online build machine):
+- Python `3.10` or `3.11`, plus `venv` module and matching dev headers (`python3.10-dev` or `python3.11-dev`)
+- `build-essential`, `cmake`, `ninja-build`, `git`
+
+Example:
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential cmake ninja-build git python3.10 python3.10-venv python3.10-dev
+```
+
 Online prefetch (layout):
 ```bash
 ./tools/bookmind_bench/scripts/prefetch_online.sh --profile layout --sample-image /path/to/sample.png

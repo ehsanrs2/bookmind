@@ -86,6 +86,26 @@ else
   profiles=("$PROFILE")
 fi
 
+if [[ " ${profiles[*]} " == *" layout "* ]]; then
+  if ! python - <<'PY'
+import socket
+
+targets = [("pypi.org", 443), ("github.com", 443)]
+for host, port in targets:
+    try:
+        socket.gethostbyname(host)
+        with socket.create_connection((host, port), timeout=4):
+            pass
+    except Exception:
+        raise SystemExit(1)
+raise SystemExit(0)
+PY
+  then
+    echo "Network required for online prefetch. Run this step on a network-enabled machine, then copy offline_bundle/ to offline system." >&2
+    exit 1
+  fi
+fi
+
 mkdir -p "$WHEEL_DIR" "$MODEL_DIR"
 
 echo "Downloading base wheels into $WHEEL_DIR"
@@ -168,11 +188,16 @@ if [[ " ${profiles[*]} " == *" layout "* ]]; then
   python -m pip install --upgrade pip setuptools wheel
   python -m pip install -r "$REQ_DIR/base.txt"
   python -m pip install -r "$REQ_DIR/layout.txt"
+  python -c "import numpy; print(f'numpy in layout venv: {numpy.__version__}')"
 
   "$ROOT_DIR/tools/bookmind_bench/scripts/build_detectron2_wheel.sh"
   python -m pip install --no-index --find-links "$LAYOUT_WHEEL_DIR" detectron2
   python -m pip download -d "$LAYOUT_WHEEL_DIR" -r "$REQ_DIR/base.txt" -r "$REQ_DIR/layout.txt"
   python -m pip download -d "$LAYOUT_WHEEL_DIR" --find-links "$LAYOUT_WHEEL_DIR" detectron2
+  if ! ls "$LAYOUT_WHEEL_DIR"/numpy-*.whl >/dev/null 2>&1; then
+    echo "Layout wheelhouse incomplete: numpy wheel not found in $LAYOUT_WHEEL_DIR" >&2
+    exit 1
+  fi
 
   mkdir -p "$LAYOUT_DIR"
   export BOOKMIND_LAYOUT_MODEL_DIR="$LAYOUT_DIR"

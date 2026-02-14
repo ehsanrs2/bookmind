@@ -136,7 +136,12 @@ for profile in "${profiles[@]}"; do
       export PADDLEOCR_HOME="$MODEL_DIR/paddleocr"
       export PADDLE_HOME="$MODEL_DIR/paddleocr"
       export HOME="$MODEL_DIR/paddleocr"
-      python -c "import detectron2; import layoutparser"
+      layout_py_minor="$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+      if [[ "$layout_py_minor" != "3.10" && "$layout_py_minor" != "3.11" ]]; then
+        echo "Layout profile requires a Python 3.10/3.11 venv, found $layout_py_minor in $venv_dir." >&2
+        exit 1
+      fi
+      python -c "import numpy; import detectron2; import layoutparser; print('OK imports')"
       python "$ROOT_DIR/tools/bookmind_bench/run.py" layout --help
       if [[ -n "$SAMPLE_IMAGE" ]]; then
         if [[ ! -f "$SAMPLE_IMAGE" ]]; then

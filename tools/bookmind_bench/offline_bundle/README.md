@@ -36,6 +36,13 @@ this repo when transferring to an offline machine.
   wheel to `wheels/layout/`.
 - Offline install consumes only `wheels/layout/` for layout dependencies.
 
+System prerequisites for layout (online build machine):
+- Python 3.10/3.11 + `venv` + matching dev headers (`python3.10-dev` or `python3.11-dev`)
+- `build-essential`, `cmake`, `ninja-build`, `git`
+
+Detectron2 is built online into a wheel in `wheels/layout/`, then installed
+offline from that wheelhouse.
+
 Commands:
 ```bash
 ./tools/bookmind_bench/scripts/prefetch_online.sh --profile layout --sample-image /path/to/sample.png
