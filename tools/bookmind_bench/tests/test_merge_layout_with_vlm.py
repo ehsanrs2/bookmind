@@ -52,7 +52,14 @@ def test_merge_layout_with_vlm(tmp_path: Path) -> None:
                 "type": "figure_caption",
                 "text": "Figure caption from vlm-layout",
                 "bbox": [100, 100, 200, 200],
-                "meta": {"trace": {"layout_line_id": 1}},
+                "meta": {
+                    "trace": {
+                        "layout_region_id": "page_0001_region_001",
+                        "layout_line_id": 1,
+                    },
+                    "page_image": "images/page_0001.png",
+                    "crop_image": "vlm/crops/page_0001_line_00001.png",
+                },
             }
         ],
     )
@@ -76,4 +83,9 @@ def test_merge_layout_with_vlm(tmp_path: Path) -> None:
     assert figure_rows[0]["meta"]["source_engines"] == ["layoutparser", "vlm"]
     assert figure_rows[0]["meta"]["trace"]["region_id"] == "page_0001_region_001"
     assert figure_rows[0]["meta"]["trace"]["layout_line_id"] == 1
-
+    assert figure_rows[0]["meta"]["figure_ref"]["layout_region_id"] == "page_0001_region_001"
+    assert figure_rows[0]["meta"]["figure_ref"]["layout_line_id"] == 1
+    assert figure_rows[0]["meta"]["figure_ref"]["page_image"] == "images/page_0001.png"
+    assert figure_rows[0]["meta"]["figure_ref"]["crop_image"] == "vlm/crops/page_0001_line_00001.png"
+    assert len(figure_rows[0]["meta"]["figure_context"]) <= 400
+    assert "A long enough OCR text line from layout parser." in figure_rows[0]["meta"]["figure_context"]

@@ -1,4 +1,6 @@
 import json
+import hashlib
+import re
 from pathlib import Path
 
 from merge import merge_outputs
@@ -68,7 +70,13 @@ def test_merge_output_schema_and_stable_ids(tmp_path: Path) -> None:
                 "type": "figure_caption",
                 "text": "Figure caption text",
                 "bbox": [100, 100, 200, 200],
-                "meta": {"confidence": 0.77},
+                "meta": {
+                    "confidence": 0.77,
+                    "trace": {
+                        "layout_region_id": "page_0001_region_007",
+                        "layout_line_id": 123,
+                    },
+                },
             }
         ],
     )
@@ -99,14 +107,28 @@ def test_merge_output_schema_and_stable_ids(tmp_path: Path) -> None:
     required_keys = {"stable_id", "page", "content_type", "text", "bbox", "meta"}
     for row in rows:
         assert required_keys.issubset(row.keys())
-        assert set(row["meta"].keys()) == {
+        assert {
             "pdf_page_start",
             "pdf_page_end",
             "source_engines",
             "block_type",
             "confidence",
             "trace",
-        }
-        assert set(row["meta"]["trace"].keys()) == {"paddleocr_line_ids", "vlm_line_id"}
+        }.issubset(set(row["meta"].keys()))
+        assert {"paddleocr_line_ids", "vlm_line_id"}.issubset(set(row["meta"]["trace"].keys()))
         assert isinstance(row["stable_id"], str)
         assert len(row["stable_id"]) == 16
+
+    figure_rows = [row for row in rows if row["content_type"] == "figure_caption"]
+    assert len(figure_rows) == 1
+    figure_meta = figure_rows[0]["meta"]
+    assert figure_meta["figure_ref"]["layout_region_id"] == "page_0001_region_007"
+    assert figure_meta["figure_ref"]["layout_line_id"] == 123
+    assert "figure_context" in figure_meta
+    assert len(figure_meta["figure_context"]) <= 400
+
+    # Stable ID must remain based only on page/type/bbox/text (not new meta fields).
+    text_norm = re.sub(r"\s+", " ", figure_rows[0]["text"].strip())
+    token = f"1|figure_caption|100,100,200,200|{text_norm}"
+    expected_stable_id = hashlib.sha1(token.encode("utf-8")).hexdigest()[:16]
+    assert figure_rows[0]["stable_id"] == expected_stable_id

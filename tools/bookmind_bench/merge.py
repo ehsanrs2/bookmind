@@ -93,6 +93,16 @@ def _bbox_iou(box_a: Sequence[float], box_b: Sequence[float]) -> float:
     return inter / union
 
 
+def _bbox_center_distance2(box_a: Sequence[float], box_b: Sequence[float]) -> float:
+    acx = (float(box_a[0]) + float(box_a[2])) / 2.0
+    acy = (float(box_a[1]) + float(box_a[3])) / 2.0
+    bcx = (float(box_b[0]) + float(box_b[2])) / 2.0
+    bcy = (float(box_b[1]) + float(box_b[3])) / 2.0
+    dx = acx - bcx
+    dy = acy - bcy
+    return dx * dx + dy * dy
+
+
 def _is_exact_match(box_a: Sequence[float], box_b: Sequence[float]) -> bool:
     return all(abs(float(a) - float(b)) <= 1e-6 for a, b in zip(box_a, box_b))
 
@@ -156,6 +166,8 @@ def _build_ingest_record(
     vlm_line_id: Optional[int],
     trace_region_id: Optional[str] = None,
     trace_layout_line_id: Optional[int] = None,
+    figure_ref: Optional[Dict[str, Any]] = None,
+    figure_context: Optional[str] = None,
 ) -> Dict[str, Any]:
     text_norm = _norm_text(text)
     bbox_norm = _bbox_to_ints(bbox)
@@ -167,21 +179,122 @@ def _build_ingest_record(
         trace["region_id"] = trace_region_id
     if trace_layout_line_id is not None:
         trace["layout_line_id"] = trace_layout_line_id
+    meta: Dict[str, Any] = {
+        "pdf_page_start": page,
+        "pdf_page_end": page,
+        "source_engines": source_engines,
+        "block_type": block_type,
+        "confidence": confidence,
+        "trace": trace,
+    }
+    if figure_ref:
+        meta["figure_ref"] = figure_ref
+    if figure_context:
+        meta["figure_context"] = figure_context
     return {
         "stable_id": _stable_id(page=page, content_type=content_type, bbox=bbox, text=text_norm),
         "page": page,
         "content_type": content_type,
         "text": text_norm,
         "bbox": bbox_norm,
-        "meta": {
-            "pdf_page_start": page,
-            "pdf_page_end": page,
-            "source_engines": source_engines,
-            "block_type": block_type,
-            "confidence": confidence,
-            "trace": trace,
-        },
+        "meta": meta,
     }
+
+
+def _extract_figure_ref(match_trace: Dict[str, Any], match_meta: Dict[str, Any]) -> Dict[str, Any]:
+    figure_ref: Dict[str, Any] = {}
+
+    layout_region_id = match_trace.get("layout_region_id")
+    if layout_region_id is None:
+        layout_region_id = match_trace.get("region_id")
+    if layout_region_id is not None:
+        figure_ref["layout_region_id"] = str(layout_region_id)
+
+    layout_line_id = match_trace.get("layout_line_id")
+    if isinstance(layout_line_id, int):
+        figure_ref["layout_line_id"] = layout_line_id
+
+    page_image = match_meta.get("page_image")
+    if page_image is None:
+        page_image = match_trace.get("page_image")
+    if isinstance(page_image, str) and page_image:
+        figure_ref["page_image"] = page_image
+
+    crop_image = match_meta.get("crop_image")
+    if crop_image is None:
+        crop_image = match_meta.get("crop_image_path")
+    if crop_image is None:
+        crop_image = match_trace.get("crop_image")
+    if crop_image is None:
+        crop_image = match_trace.get("crop_image_path")
+    if isinstance(crop_image, str) and crop_image:
+        figure_ref["crop_image"] = crop_image
+
+    return figure_ref
+
+
+def _build_figure_context(
+    *,
+    figure_text: str,
+    figure_bbox: Optional[Sequence[float]],
+    nearby_page_texts: Sequence[Dict[str, Any]],
+    max_total_chars: int = 400,
+    caption_chars: int = 250,
+    nearby_chars: int = 150,
+    max_nearby_items: int = 2,
+) -> str:
+    caption_part = _norm_text(figure_text)[:caption_chars].strip()
+    if not caption_part:
+        caption_part = _norm_text(figure_text)[:max_total_chars].strip()
+        return caption_part[:max_total_chars]
+
+    if figure_bbox is None or not nearby_page_texts:
+        return caption_part[:max_total_chars]
+
+    ranked: List[Tuple[int, float, float, int, str]] = []
+    for item in nearby_page_texts:
+        text = _norm_text(item.get("text"))
+        if not text:
+            continue
+        text_bbox = item.get("bbox")
+        line_id = int(item.get("line_id", 0))
+        if isinstance(text_bbox, list) and len(text_bbox) == 4:
+            iou = _bbox_iou(figure_bbox, text_bbox)
+            dist2 = _bbox_center_distance2(figure_bbox, text_bbox)
+        else:
+            iou = 0.0
+            dist2 = float("inf")
+        ranked.append((1 if iou > 0 else 0, iou, -dist2, -line_id, text))
+
+    if not ranked:
+        return caption_part[:max_total_chars]
+
+    ranked.sort(reverse=True)
+    nearby_chunks: List[str] = []
+    used = 0
+    for _, _, _, _, text in ranked:
+        if len(nearby_chunks) >= max_nearby_items:
+            break
+        remaining = nearby_chars - used
+        if remaining <= 0:
+            break
+        snippet = text[:remaining].strip()
+        if not snippet:
+            continue
+        sep = 2 if nearby_chunks else 0
+        if sep and used + sep >= nearby_chars:
+            break
+        if sep:
+            used += sep
+        nearby_chunks.append(snippet)
+        used += len(snippet)
+
+    if not nearby_chunks:
+        return caption_part[:max_total_chars]
+
+    nearby_summary = "; ".join(nearby_chunks)
+    context = f"{caption_part} | Nearby OCR: {nearby_summary}"
+    return context[:max_total_chars]
 
 
 def merge_outputs(
@@ -216,6 +329,7 @@ def merge_outputs(
                     "trace": row.get("meta", {}).get("trace")
                     if isinstance(row.get("meta"), dict)
                     else None,
+                    "meta": row.get("meta") if isinstance(row.get("meta"), dict) else {},
                     "confidence": row.get("meta", {}).get("confidence")
                     if isinstance(row.get("meta"), dict)
                     else None,
@@ -225,8 +339,26 @@ def merge_outputs(
     out_rows: List[Dict[str, Any]] = []
     emitted_by_type: Dict[str, int] = {"text": 0, "table": 0, "figure_caption": 0}
     matched_captions = 0
+    paddle_rows = list(_read_jsonl_with_line_ids(paddle_jsonl))
+    nearby_text_by_page: Dict[int, List[Dict[str, Any]]] = {}
+    for line_id, row in paddle_rows:
+        if row.get("type") != "ocr_text":
+            continue
+        page = row.get("page")
+        if not isinstance(page, int):
+            continue
+        text = _norm_text(row.get("text"))
+        if len(text) < min_text_chars:
+            continue
+        nearby_text_by_page.setdefault(page, []).append(
+            {
+                "line_id": line_id,
+                "bbox": _normalize_bbox(row.get("bbox")),
+                "text": text,
+            }
+        )
 
-    for line_id, row in _read_jsonl_with_line_ids(paddle_jsonl):
+    for line_id, row in paddle_rows:
         page = row.get("page")
         record_type = row.get("type")
         text = _norm_text(row.get("text"))
@@ -292,10 +424,17 @@ def merge_outputs(
                 continue
             candidates.remove(match)
             match_trace = match.get("trace") if isinstance(match.get("trace"), dict) else {}
+            match_meta = match.get("meta") if isinstance(match.get("meta"), dict) else {}
             match_layout_line_id = (
                 int(match_trace["layout_line_id"])
                 if isinstance(match_trace.get("layout_line_id"), int)
                 else None
+            )
+            figure_ref = _extract_figure_ref(match_trace, match_meta)
+            figure_context = _build_figure_context(
+                figure_text=match["text"],
+                figure_bbox=bbox,
+                nearby_page_texts=nearby_text_by_page.get(page, []),
             )
             record = _build_ingest_record(
                 page=page,
@@ -313,6 +452,8 @@ def merge_outputs(
                 if meta.get("region_id") is not None
                 else None,
                 trace_layout_line_id=match_layout_line_id,
+                figure_ref=figure_ref if figure_ref else None,
+                figure_context=figure_context if figure_context else None,
             )
             out_rows.append(record)
             emitted_by_type["figure_caption"] += 1

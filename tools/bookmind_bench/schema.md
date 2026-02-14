@@ -329,3 +329,7 @@ Field notes:
 - `bbox`: rounded integer bbox `[x0, y0, x1, y1]` or `null`.
 - `source_engines`: derived from source JSONL engine for text/tables (for example `["paddleocr"]` or `["layoutparser"]`) and `[<source_engine>, "vlm"]` for matched figure captions.
 - Figure-caption matching is page-aware and uses exact bbox first, then coordinate tolerance (`--bbox-tol`), then IoU fallback (`--iou`).
+- `figure_caption` records include additive fields under `meta`:
+  - `meta.figure_ref.layout_region_id` and `meta.figure_ref.layout_line_id` (from VLM `meta.trace` when available).
+  - `meta.figure_ref.page_image` and `meta.figure_ref.crop_image` are optional path hints propagated from VLM metadata when present.
+  - `meta.figure_context`: short bounded context string (max 400 chars) for retrieval/UI debug, built from caption text plus tiny nearby same-page OCR snippets.
