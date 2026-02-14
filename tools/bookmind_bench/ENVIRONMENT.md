@@ -168,6 +168,25 @@ python tools/bookmind_bench/run.py vlm \
 Quick regression check: the server should start without CUDA OOM during
 initialization (before any requests are sent).
 
+## Ollama backend (12GB VRAM)
+Ollama can be used as the VLM caption backend without changing output schema.
+Expected local model tag: `qwen3-vl:latest` (must already exist in Ollama).
+
+Sanity-check Ollama and model tag (offline-safe, no pulls):
+```bash
+./tools/bookmind_bench/scripts/start_ollama_qwen3vl.sh
+```
+
+Run `vlm-layout` with Ollama:
+```bash
+python tools/bookmind_bench/run.py vlm-layout \
+  --backend ollama \
+  --ollama_url http://127.0.0.1:11434 \
+  --ollama_model qwen3-vl:latest \
+  --imgdir <IMG_DIR> \
+  --out <RUN_DIR>
+```
+
 ## Generate VLM captions for a run directory
 1) Start the server:
 ```bash

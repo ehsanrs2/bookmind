@@ -2,23 +2,26 @@
 
 from __future__ import annotations
 
-import base64
 import json
 import os
 import time
 import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
+import requests
 from engines.crop_utils import crop_image
 from engines.layout_engine import list_page_images
+from engines.vlm_providers import build_vlm_provider
 from PIL import Image
 
 
 DEFAULT_ENDPOINT = "http://127.0.0.1:8000/v1"
 DEFAULT_MODEL = "qwen3-vl"
+DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
+DEFAULT_OLLAMA_MODEL = "qwen3-vl:latest"
+DEFAULT_BACKEND = "vllm"
 DEFAULT_PROMPT_TEMPLATE = "technical_diagram_v1"
 DEFAULT_IOU_THRESHOLD = 0.01
 DEFAULT_OCR_MAX_CHARS = 800
@@ -251,62 +254,33 @@ def _build_prompt(prompt_template: str, ocr_hints: str) -> str:
     return f"{base_prompt}\n\nOCR hints: {ocr_hints}"
 
 
-def _encode_image_base64(image_path: Path) -> str:
-    data = image_path.read_bytes()
-    return base64.b64encode(data).decode("ascii")
+def _fit_prompt_to_limit(
+    prompt_template: str,
+    ocr_hints: str,
+    *,
+    max_prompt_chars: int = 6000,
+) -> str:
+    prompt = _build_prompt(prompt_template, ocr_hints)
+    if len(prompt) <= max_prompt_chars:
+        return prompt
+    if not ocr_hints:
+        return prompt[:max_prompt_chars]
 
-
-def _post_chat_completion(endpoint: str, payload: Dict[str, Any], timeout_s: int = 60) -> Dict[str, Any]:
-    url = endpoint.rstrip("/") + "/chat/completions"
-    body = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        url,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=timeout_s) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
-def _extract_caption(response: Dict[str, Any]) -> str:
-    choices = response.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise ValueError("VLM response missing choices")
-    message = choices[0].get("message")
-    if not isinstance(message, dict):
-        raise ValueError("VLM response missing message")
-    content = message.get("content")
-    if not isinstance(content, str):
-        raise ValueError("VLM response missing content")
-    return content.strip()
-
-
-def _build_payload(
-    model: str,
-    prompt: str,
-    image_path: Path,
-    max_tokens: int,
-    temperature: float,
-) -> Dict[str, Any]:
-    image_b64 = _encode_image_base64(image_path)
-    return {
-        "model": model,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{image_b64}"},
-                    },
-                ],
-            }
-        ],
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
+    low = 0
+    high = len(ocr_hints)
+    best = ""
+    while low <= high:
+        mid = (low + high) // 2
+        candidate_hints = ocr_hints[:mid].rstrip()
+        if mid < len(ocr_hints):
+            candidate_hints = candidate_hints.rstrip(". ") + "..."
+        candidate = _build_prompt(prompt_template, candidate_hints)
+        if len(candidate) <= max_prompt_chars:
+            best = candidate
+            low = mid + 1
+        else:
+            high = mid - 1
+    return best or _build_prompt(prompt_template, "")
 
 
 def _resize_crop(path: Path, max_side: int) -> None:
@@ -334,6 +308,9 @@ def run_vlm_layout(
     out_dir: str,
     endpoint: str = DEFAULT_ENDPOINT,
     model: Optional[str] = None,
+    backend: str = DEFAULT_BACKEND,
+    ollama_url: str = DEFAULT_OLLAMA_URL,
+    ollama_model: str = DEFAULT_OLLAMA_MODEL,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     temperature: float = DEFAULT_TEMPERATURE,
     ocr_hint_max_chars: int = DEFAULT_OCR_MAX_CHARS,
@@ -350,6 +327,15 @@ def run_vlm_layout(
 
     if model is None:
         model = os.environ.get("BOOKMIND_VLM_MODEL", DEFAULT_MODEL)
+    backend = backend.strip().lower()
+    provider = build_vlm_provider(
+        backend=backend,
+        endpoint=endpoint,
+        model=model,
+        ollama_url=ollama_url,
+        ollama_model=ollama_model,
+    )
+    model_name = ollama_model if backend == "ollama" else model
 
     image_map = _resolve_page_image_map(imgdir_path)
     ocr_index = _load_layout_ocr_blocks(layout_path)
@@ -400,18 +386,15 @@ def run_vlm_layout(
                 max_chars=ocr_hint_max_chars,
             )
 
-        prompt = _build_prompt(prompt_template, ocr_hints)
+        prompt = _fit_prompt_to_limit(prompt_template, ocr_hints, max_prompt_chars=6000)
         start = time.perf_counter()
         try:
-            payload = _build_payload(
-                model,
-                prompt,
-                crop_path,
+            caption, _ = provider.caption(
+                image_path=str(crop_path),
+                prompt=prompt,
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
-            response = _post_chat_completion(endpoint, payload)
-            caption = _extract_caption(response)
         except urllib.error.HTTPError as exc:
             body = ""
             try:
@@ -423,6 +406,18 @@ def run_vlm_layout(
             )
             continue
         except urllib.error.URLError as exc:
+            if backend == "ollama":
+                raise SystemExit(
+                    f"Ollama endpoint unreachable at {ollama_url}. Start Ollama and ensure the local API is available."
+                ) from exc
+            raise SystemExit(
+                f"VLM endpoint unreachable at {endpoint}. Start vLLM with OpenAI-compatible API."
+            ) from exc
+        except requests.RequestException as exc:
+            if backend == "ollama":
+                raise SystemExit(
+                    f"Ollama endpoint unreachable at {ollama_url}. Start Ollama and ensure the local API is available."
+                ) from exc
             raise SystemExit(
                 f"VLM endpoint unreachable at {endpoint}. Start vLLM with OpenAI-compatible API."
             ) from exc
@@ -442,7 +437,7 @@ def run_vlm_layout(
                 "pdf_page_start": row.get("meta", {}).get("pdf_page_start", page),
                 "pdf_page_end": row.get("meta", {}).get("pdf_page_end", page),
                 "prompt_template": prompt_template,
-                "model": model,
+                "model": model_name,
                 "job_index": written + 1,
                 "used_ocr_hints": bool(ocr_hints),
                 "used_region_hints": used_region_hints,
@@ -463,6 +458,9 @@ def run_vlm_caption_jobs(
     out_dir: str,
     endpoint: str = DEFAULT_ENDPOINT,
     model: Optional[str] = None,
+    backend: str = DEFAULT_BACKEND,
+    ollama_url: str = DEFAULT_OLLAMA_URL,
+    ollama_model: str = DEFAULT_OLLAMA_MODEL,
     paddleocr_jsonl: Optional[str] = None,
     use_ocr_hints: bool = True,
     max_tokens: int = DEFAULT_MAX_TOKENS,
@@ -477,6 +475,15 @@ def run_vlm_caption_jobs(
 
     if model is None:
         model = os.environ.get("BOOKMIND_VLM_MODEL", DEFAULT_MODEL)
+    backend = backend.strip().lower()
+    provider = build_vlm_provider(
+        backend=backend,
+        endpoint=endpoint,
+        model=model,
+        ollama_url=ollama_url,
+        ollama_model=ollama_model,
+    )
+    model_name = ollama_model if backend == "ollama" else model
 
     ocr_index = _load_ocr_blocks(Path(paddleocr_jsonl)) if paddleocr_jsonl else {}
 
@@ -503,19 +510,16 @@ def run_vlm_caption_jobs(
             ocr_hints, used_hints = _select_ocr_hints(bbox, blocks)
 
         prompt_template = job.get("prompt_template") or DEFAULT_PROMPT_TEMPLATE
-        prompt = _build_prompt(str(prompt_template), ocr_hints)
+        prompt = _fit_prompt_to_limit(str(prompt_template), ocr_hints, max_prompt_chars=6000)
 
         start = time.perf_counter()
         try:
-            payload = _build_payload(
-                model,
-                prompt,
-                Path(crop_path),
+            caption, _ = provider.caption(
+                image_path=str(crop_path),
+                prompt=prompt,
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
-            response = _post_chat_completion(endpoint, payload)
-            caption = _extract_caption(response)
         except urllib.error.HTTPError as exc:
             body = ""
             try:
@@ -527,6 +531,18 @@ def run_vlm_caption_jobs(
             )
             continue
         except urllib.error.URLError as exc:
+            if backend == "ollama":
+                raise SystemExit(
+                    f"Ollama endpoint unreachable at {ollama_url}. Start Ollama and ensure the local API is available."
+                ) from exc
+            raise SystemExit(
+                f"VLM endpoint unreachable at {endpoint}. Start vLLM with OpenAI-compatible API."
+            ) from exc
+        except requests.RequestException as exc:
+            if backend == "ollama":
+                raise SystemExit(
+                    f"Ollama endpoint unreachable at {ollama_url}. Start Ollama and ensure the local API is available."
+                ) from exc
             raise SystemExit(
                 f"VLM endpoint unreachable at {endpoint}. Start vLLM with OpenAI-compatible API."
             ) from exc
@@ -546,7 +562,7 @@ def run_vlm_caption_jobs(
                 "pdf_page_start": job.get("pdf_page_start", page),
                 "pdf_page_end": job.get("pdf_page_end", page),
                 "prompt_template": prompt_template,
-                "model": model,
+                "model": model_name,
                 "job_index": idx,
                 "used_ocr_hints": used_hints,
             },

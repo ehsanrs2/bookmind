@@ -14,7 +14,13 @@ from engines.paddleocr_engine import (
     run_paddleocr,
     run_paddleocr_on_image,
 )
-from engines.vlm_caption_engine import run_vlm_caption_jobs, run_vlm_layout
+from engines.vlm_caption_engine import (
+    DEFAULT_BACKEND,
+    DEFAULT_OLLAMA_MODEL,
+    DEFAULT_OLLAMA_URL,
+    run_vlm_caption_jobs,
+    run_vlm_layout,
+)
 from engines.vlm_hook import plan_vlm_jobs
 from merge import merge_outputs
 from render_pdf import parse_pages, render_pdf_pages
@@ -243,11 +249,27 @@ def _cmd_vlm(args: argparse.Namespace) -> int:
     if paddleocr_path and not paddleocr_path.exists():
         raise SystemExit(f"PaddleOCR JSONL not found: {paddleocr_path}")
 
+    backend = str(args.backend).strip().lower()
+    if backend not in {"vllm", "ollama"}:
+        raise SystemExit(f"Unsupported backend: {args.backend}")
+    if backend == "ollama":
+        if not str(args.ollama_url).strip():
+            raise SystemExit("--ollama_url is required when --backend=ollama")
+        if not str(args.ollama_model).strip():
+            raise SystemExit("--ollama_model is required when --backend=ollama")
+        selected_model = args.ollama_model
+    else:
+        selected_model = args.model
+    print(f"[vlm] backend={backend} model={selected_model}")
+
     written = run_vlm_caption_jobs(
         jobs_jsonl=str(jobs_path),
         out_dir=str(out_dir),
+        backend=backend,
         endpoint=args.endpoint,
         model=args.model,
+        ollama_url=args.ollama_url,
+        ollama_model=args.ollama_model,
         paddleocr_jsonl=str(paddleocr_path) if paddleocr_path else None,
         use_ocr_hints=args.use_ocr_hints,
         max_tokens=args.max_tokens,
@@ -272,12 +294,28 @@ def _cmd_vlm_layout(args: argparse.Namespace) -> int:
     if not img_dir.exists():
         raise SystemExit(f"Image directory not found: {img_dir}")
 
+    backend = str(args.backend).strip().lower()
+    if backend not in {"vllm", "ollama"}:
+        raise SystemExit(f"Unsupported backend: {args.backend}")
+    if backend == "ollama":
+        if not str(args.ollama_url).strip():
+            raise SystemExit("--ollama_url is required when --backend=ollama")
+        if not str(args.ollama_model).strip():
+            raise SystemExit("--ollama_model is required when --backend=ollama")
+        selected_model = args.ollama_model
+    else:
+        selected_model = args.model
+    print(f"[vlm-layout] backend={backend} model={selected_model}")
+
     written = run_vlm_layout(
         layout_jsonl=str(layout_path),
         imgdir=str(img_dir),
         out_dir=str(out_dir),
+        backend=backend,
         endpoint=args.endpoint,
         model=args.model,
+        ollama_url=args.ollama_url,
+        ollama_model=args.ollama_model,
         max_tokens=args.max_tokens,
         temperature=args.temperature,
         ocr_hint_max_chars=args.ocr_hint_max_chars,
@@ -466,6 +504,12 @@ def build_parser() -> argparse.ArgumentParser:
     vlm.add_argument("--jobs", required=True, help="Path to VLM jobs JSONL")
     vlm.add_argument("--out", required=True, help="Output directory for runs")
     vlm.add_argument(
+        "--backend",
+        choices=["vllm", "ollama"],
+        default=DEFAULT_BACKEND,
+        help="VLM backend (default vllm)",
+    )
+    vlm.add_argument(
         "--endpoint",
         default="http://127.0.0.1:8000/v1",
         help="Local OpenAI-compatible VLM endpoint (default http://127.0.0.1:8000/v1)",
@@ -474,6 +518,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--model",
         default=os.environ.get("BOOKMIND_VLM_MODEL", "qwen3-vl"),
         help="Model name for the VLM endpoint (default env BOOKMIND_VLM_MODEL or qwen3-vl)",
+    )
+    vlm.add_argument(
+        "--ollama_url",
+        default=DEFAULT_OLLAMA_URL,
+        help=f"Ollama URL for --backend ollama (default {DEFAULT_OLLAMA_URL})",
+    )
+    vlm.add_argument(
+        "--ollama_model",
+        default=DEFAULT_OLLAMA_MODEL,
+        help=f"Ollama model tag for --backend ollama (default {DEFAULT_OLLAMA_MODEL})",
     )
     vlm.add_argument(
         "--paddleocr_jsonl",
@@ -512,6 +566,12 @@ def build_parser() -> argparse.ArgumentParser:
     vlm_layout.add_argument("--imgdir", required=True, help="Directory of PNG pages")
     vlm_layout.add_argument("--out", required=True, help="Output directory for runs")
     vlm_layout.add_argument(
+        "--backend",
+        choices=["vllm", "ollama"],
+        default=DEFAULT_BACKEND,
+        help="VLM backend (default vllm)",
+    )
+    vlm_layout.add_argument(
         "--endpoint",
         default="http://127.0.0.1:8000/v1",
         help="Local OpenAI-compatible VLM endpoint (default http://127.0.0.1:8000/v1)",
@@ -520,6 +580,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--model",
         default=os.environ.get("BOOKMIND_VLM_MODEL", "qwen3-vl"),
         help="Model name for the VLM endpoint (default env BOOKMIND_VLM_MODEL or qwen3-vl)",
+    )
+    vlm_layout.add_argument(
+        "--ollama_url",
+        default=DEFAULT_OLLAMA_URL,
+        help=f"Ollama URL for --backend ollama (default {DEFAULT_OLLAMA_URL})",
+    )
+    vlm_layout.add_argument(
+        "--ollama_model",
+        default=DEFAULT_OLLAMA_MODEL,
+        help=f"Ollama model tag for --backend ollama (default {DEFAULT_OLLAMA_MODEL})",
     )
     vlm_layout.add_argument(
         "--max_tokens",
