@@ -22,6 +22,7 @@ from engines.vlm_caption_engine import (
     run_vlm_layout,
 )
 from engines.vlm_hook import plan_vlm_jobs
+from bundle import bundle_run
 from merge import merge_outputs
 from render_pdf import parse_pages, render_pdf_pages
 
@@ -363,6 +364,20 @@ def _cmd_merge(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_bundle(args: argparse.Namespace) -> int:
+    result = bundle_run(
+        run_dir=args.out,
+        imgdir=args.imgdir,
+        include_images=bool(args.include_images),
+    )
+    print(f"Bundle created at {result.bundle_dir}")
+    print(
+        f"Bundle records={result.records_count} copied_images={result.copied_images} "
+        f"missing_images={result.missing_images}"
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bookmind-bench",
@@ -655,6 +670,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="IoU threshold for fallback figure-caption matching (default 0.95)",
     )
     merge.set_defaults(func=_cmd_merge)
+
+    bundle = subparsers.add_parser(
+        "bundle", help="Create portable ingest bundle + quality report"
+    )
+    bundle.add_argument("--out", required=True, help="Run directory")
+    bundle.add_argument(
+        "--imgdir",
+        required=False,
+        help="Optional page images directory for resolving figure image references",
+    )
+    bundle.add_argument(
+        "--include_images",
+        default=False,
+        type=lambda v: str(v).lower() in {"1", "true", "yes", "y"},
+        help="Copy figure page/crop images into bundle/images (default false)",
+    )
+    bundle.set_defaults(func=_cmd_bundle)
 
     return parser
 
