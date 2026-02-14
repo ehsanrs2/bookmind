@@ -73,6 +73,7 @@ def test_run_eval_computes_summary_metrics(tmp_path: Path, monkeypatch) -> None:
     assert summary["count_queries"] == 2
     assert summary["avg_total_ms"] == 70.0
     assert summary["p50_total_ms"] == 70.0
+    assert summary["avg_answer_len_chars"] > 0
     assert summary["avg_num_citations"] == 2.0
     assert summary["percent_queries_with_any_citation"] == 100.0
     assert summary["hit@k_pages"] == 50.0
@@ -81,9 +82,17 @@ def test_run_eval_computes_summary_metrics(tmp_path: Path, monkeypatch) -> None:
     q1 = results["queries"][0]
     assert q1["retrieved_ids"][0] == "f1"
     assert q1["citation_rate"] > 0
+    assert q1["answer_text"]
+    assert q1["answer_len_chars"] > 0
 
     q2 = results["queries"][1]
     assert q2["citation_rate"] == 0.0
+    assert q2["answer_text"]
+    assert q2["answer_len_chars"] > 0
 
     assert (tmp_path / "items" / "q1.json").exists()
     assert (tmp_path / "items" / "q2.json").exists()
+    assert (tmp_path / "per_query" / "q01_answer.txt").exists()
+    assert (tmp_path / "per_query" / "q01_citations.json").exists()
+    assert (tmp_path / "per_query" / "q02_answer.txt").exists()
+    assert (tmp_path / "per_query" / "q02_citations.json").exists()

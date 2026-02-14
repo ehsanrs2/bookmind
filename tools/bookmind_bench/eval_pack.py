@@ -116,7 +116,9 @@ def run_eval(
 ) -> Dict[str, Any]:
     out_dir = Path(output_dir)
     items_dir = out_dir / "items"
+    per_query_dir = out_dir / "per_query"
     items_dir.mkdir(parents=True, exist_ok=True)
+    per_query_dir.mkdir(parents=True, exist_ok=True)
 
     content_types = retrieval_cfg.get("content_types")
     cleaned_types = [str(item).strip() for item in (content_types or []) if str(item).strip()]
@@ -170,12 +172,13 @@ def run_eval(
         messages = build_rag_messages(query_text, context_text)
 
         t2 = time.perf_counter()
-        answer_text, usage = generate_answer(
+        raw_answer_text, usage = generate_answer(
             provider=provider,
             messages=messages,
             max_tokens=int(gen_cfg.get("max_tokens", 512)),
             temperature=float(gen_cfg.get("temperature", 0.2)),
         )
+        answer_text = str(raw_answer_text or "").strip()
         t3 = time.perf_counter()
 
         retrieval_ms = (t1 - t0) * 1000.0
@@ -199,9 +202,9 @@ def run_eval(
                 citation_pages.append(page_value)
 
         retrieved_ids = [str(row.get("stable_id") or row.get("id") or "") for row in retrieved]
-        answer_len_chars = len(str(answer_text or ""))
+        answer_len_chars = len(answer_text)
         citation_count = len(citation_rows)
-        citation_rate = _citation_rate(str(answer_text or ""))
+        citation_rate = _citation_rate(answer_text)
 
         if citation_count > 0:
             any_citation_count += 1
@@ -219,6 +222,7 @@ def run_eval(
                 "generation_ms": round(generation_ms, 3),
                 "total_ms": round(total_ms, 3),
             },
+            "answer_text": answer_text,
             "answer": answer_text,
             "answer_len_chars": answer_len_chars,
             "citation_rate": round(citation_rate, 4),
@@ -229,6 +233,20 @@ def run_eval(
         }
         rows.append(row)
         _write_json(items_dir / f"{query_id}.json", row)
+        per_query_prefix = f"q{index:02d}"
+        (per_query_dir / f"{per_query_prefix}_answer.txt").write_text(
+            answer_text + "\n",
+            encoding="utf-8",
+        )
+        _write_json(
+            per_query_dir / f"{per_query_prefix}_citations.json",
+            {
+                "id": query_id,
+                "query": query_text,
+                "citations": citation_rows,
+                "retrieved_ids": retrieved_ids,
+            },
+        )
 
         total_values.append(total_ms)
         answer_len_values.append(answer_len_chars)
@@ -354,6 +372,23 @@ def _report_lines(results: Dict[str, Any]) -> List[str]:
 
 
 def write_reports(results_dict: Dict[str, Any], output_dir: str | Path) -> None:
+    queries = results_dict.get("queries")
+    summary = results_dict.get("summary")
+    if isinstance(queries, list):
+        answer_lengths: List[int] = []
+        for row in queries:
+            if not isinstance(row, dict):
+                continue
+            answer_text = str(row.get("answer_text") or row.get("answer") or "").strip()
+            answer_len = len(answer_text)
+            row["answer_text"] = answer_text
+            row["answer_len_chars"] = answer_len
+            answer_lengths.append(answer_len)
+        if isinstance(summary, dict):
+            count_queries = int(summary.get("count_queries") or 0)
+            if count_queries > 0 and answer_lengths:
+                summary["avg_answer_len_chars"] = round(sum(answer_lengths) / count_queries, 3)
+
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     report_json = out_dir / "report.json"
