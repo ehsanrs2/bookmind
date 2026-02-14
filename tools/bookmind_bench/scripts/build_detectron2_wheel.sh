@@ -58,11 +58,18 @@ import sysconfig
 
 py_minor = f"{sys.version_info.major}.{sys.version_info.minor}"
 include_dir = sysconfig.get_config_var("INCLUDEPY")
-if not include_dir:
-    raise SystemExit(
-        f"Python development headers not found (INCLUDEPY empty). Install python{py_minor}-dev."
-    )
-header = pathlib.Path(include_dir) / "Python.h"
+if include_dir:
+    include_path = pathlib.Path(include_dir)
+else:
+    include_path = pathlib.Path()
+
+# Some standalone Python builds report /install/include/... in sysconfig.
+if not include_dir or not include_path.exists():
+    fallback = pathlib.Path(sys.executable).resolve().parents[1] / "include" / f"python{py_minor}"
+    if fallback.exists():
+        include_path = fallback
+
+header = include_path / "Python.h"
 if not header.exists():
     raise SystemExit(
         f"Python development headers missing at {header}. Install python{py_minor}-dev."
@@ -70,6 +77,14 @@ if not header.exists():
 PY
 
 python -m pip install --upgrade pip wheel setuptools pybind11
+
+# Torch C++ extension tooling may default to clang++; force GNU toolchain when clang is absent.
+if ! command -v clang++ >/dev/null 2>&1 && command -v g++ >/dev/null 2>&1; then
+  export CXX=g++
+fi
+if ! command -v clang >/dev/null 2>&1 && command -v gcc >/dev/null 2>&1; then
+  export CC=gcc
+fi
 
 mkdir -p "$LAYOUT_WHEEL_DIR"
 rm -f "$LAYOUT_WHEEL_DIR"/detectron2-*.whl
@@ -80,11 +95,14 @@ trap 'rm -rf "$workdir"' EXIT
 git clone --depth 1 "$DETECTRON2_REPO_URL" "$workdir/detectron2"
 (
   cd "$workdir/detectron2"
-  git fetch --depth 1 origin "$DETECTRON2_COMMIT"
-  git checkout "$DETECTRON2_COMMIT"
+  if git fetch --depth 1 origin "$DETECTRON2_COMMIT"; then
+    git checkout "$DETECTRON2_COMMIT"
+  else
+    echo "Warning: detectron2 commit $DETECTRON2_COMMIT not found; using repository HEAD." >&2
+  fi
 )
 
-python -m pip wheel --no-deps --wheel-dir "$LAYOUT_WHEEL_DIR" "$workdir/detectron2"
+python -m pip wheel --no-build-isolation --no-deps --wheel-dir "$LAYOUT_WHEEL_DIR" "$workdir/detectron2"
 
 wheel_path="$(ls -1 "$LAYOUT_WHEEL_DIR"/detectron2-*.whl | head -n 1)"
 if [[ -z "$wheel_path" ]]; then

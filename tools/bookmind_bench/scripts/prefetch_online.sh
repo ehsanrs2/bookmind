@@ -191,7 +191,7 @@ if [[ " ${profiles[*]} " == *" layout "* ]]; then
   python -c "import numpy; print(f'numpy in layout venv: {numpy.__version__}')"
 
   "$ROOT_DIR/tools/bookmind_bench/scripts/build_detectron2_wheel.sh"
-  python -m pip install --no-index --find-links "$LAYOUT_WHEEL_DIR" detectron2
+  python -m pip install --no-index --find-links "$LAYOUT_WHEEL_DIR" --no-deps detectron2
   python -m pip download -d "$LAYOUT_WHEEL_DIR" -r "$REQ_DIR/base.txt" -r "$REQ_DIR/layout.txt"
   python -m pip download -d "$LAYOUT_WHEEL_DIR" --find-links "$LAYOUT_WHEEL_DIR" detectron2
   if ! ls "$LAYOUT_WHEEL_DIR"/numpy-*.whl >/dev/null 2>&1; then

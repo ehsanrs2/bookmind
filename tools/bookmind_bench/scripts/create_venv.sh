@@ -141,7 +141,7 @@ create_profile_env() {
   source "$venv_dir/bin/activate"
 
   if [[ "$profile" == "layout" ]]; then
-    layout_py_minor="$(python -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')"
+    layout_py_minor="$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
     if [[ "$layout_py_minor" != "3.10" && "$layout_py_minor" != "3.11" ]]; then
       deactivate || true
       echo "Layout venv at $venv_dir uses Python $layout_py_minor; recreate with python3.10 or python3.11." >&2
@@ -163,7 +163,10 @@ create_profile_env() {
   if [[ "$MODE" == "online" && ( "$profile" == "ocr" || "$profile" == "layout" ) ]]; then
     local cuda_ver=""
     if command -v nvidia-smi >/dev/null 2>&1; then
-      cuda_ver="$(nvidia-smi --query-gpu=cuda_version --format=csv,noheader 2>/dev/null | head -n 1 | tr -d '[:space:]')"
+      cuda_ver="$(
+        nvidia-smi --query-gpu=cuda_version --format=csv,noheader 2>/dev/null \
+          | head -n 1 | tr -d '[:space:]' || true
+      )"
     fi
     if [[ -z "$cuda_ver" ]] && command -v nvcc >/dev/null 2>&1; then
       cuda_ver="$(nvcc --version | awk '/release/{print $NF}' | tr -d 'V,')"
