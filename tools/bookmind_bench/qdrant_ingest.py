@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import uuid
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
 
 DEFAULT_EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 DEFAULT_EMBED_ALIAS = "all-MiniLM-L6-v2"
 DEFAULT_EMBED_DIM = 384
+VALID_ID_MODES = {"uint64", "uuid"}
 
 
 def _is_offline_enabled() -> bool:
@@ -116,13 +119,33 @@ def _build_payload(record: Dict[str, Any], run_dir: str, bundle_relpath: str) ->
     }
 
 
+def qdrant_point_id_from_stable_id(stable_id: str, mode: str = "uint64") -> Union[int, str]:
+    """Convert bench stable_id (hex) to a Qdrant-compatible point ID."""
+    stable_id_clean = str(stable_id or "").strip()
+    if not stable_id_clean:
+        raise ValueError("stable_id is empty")
+    if re.fullmatch(r"[0-9a-fA-F]+", stable_id_clean) is None:
+        raise ValueError(f"stable_id is not hex: {stable_id!r}")
+
+    mode_clean = str(mode or "uint64").strip().lower()
+    if mode_clean not in VALID_ID_MODES:
+        raise ValueError(f"Unsupported id mode: {mode!r}")
+
+    if mode_clean == "uint64":
+        if len(stable_id_clean) > 16:
+            raise ValueError(f"stable_id is too long for uint64: {stable_id!r}")
+        return int(stable_id_clean, 16)
+
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, stable_id_clean.lower()))
+
+
 def ensure_collection(
     client,
     collection: str,
     dim: int,
     distance: str = "Cosine",
     recreate: bool = False,
-) -> None:
+) -> Dict[str, bool]:
     """Ensure target collection exists with the expected vector params."""
     try:
         from qdrant_client.http import models
@@ -132,12 +155,19 @@ def ensure_collection(
         ) from exc
 
     exists = bool(client.collection_exists(collection_name=collection))
+    deleted = False
+    created = False
     if recreate and exists:
         client.delete_collection(collection_name=collection)
+        deleted = True
         exists = False
 
     if exists:
-        return
+        return {
+            "collection_exists_before": True,
+            "collection_recreated": False,
+            "collection_created": False,
+        }
 
     distance_name = str(distance or "Cosine").strip().upper()
     if distance_name not in {"COSINE", "DOT", "EUCLID", "MANHATTAN"}:
@@ -150,6 +180,12 @@ def ensure_collection(
             distance=getattr(models.Distance, distance_name),
         ),
     )
+    created = True
+    return {
+        "collection_exists_before": deleted or False,
+        "collection_recreated": deleted and created,
+        "collection_created": created,
+    }
 
 
 def embed_texts(model, texts: Sequence[str], batch_size: int = 64) -> List[List[float]]:
@@ -176,6 +212,7 @@ def ingest_bundle(
     recreate: bool = False,
     batch_size: int = 64,
     timeout_s: int = 60,
+    id_mode: str = "uint64",
 ) -> Dict[str, Any]:
     """Ingest normalized bundle records into Qdrant."""
     bundle_path = Path(bundle_dir)
@@ -185,23 +222,37 @@ def ingest_bundle(
 
     rows = _read_jsonl(records_path)
     records: List[Dict[str, Any]] = []
+    point_ids: List[Union[int, str]] = []
     skipped_missing_id = 0
+    skipped_invalid_id = 0
 
     for row in rows:
         stable_id = row.get("stable_id")
         if not isinstance(stable_id, str) or not stable_id.strip():
             skipped_missing_id += 1
             continue
+        try:
+            point_id = qdrant_point_id_from_stable_id(stable_id, mode=id_mode)
+        except ValueError:
+            skipped_invalid_id += 1
+            continue
         records.append(row)
+        point_ids.append(point_id)
 
     if not records:
         return {
             "records_total": len(rows),
             "records_ingested": 0,
+            "records_failed": 0,
             "records_skipped_missing_id": skipped_missing_id,
+            "records_skipped_invalid_id": skipped_invalid_id,
             "collection": collection,
             "qdrant_url": qdrant_url,
             "bundle_dir": str(bundle_path),
+            "id_mode": id_mode,
+            "collection_exists_before": False,
+            "collection_recreated": False,
+            "collection_created": False,
         }
 
     model = _load_embedding_model(embed_model)
@@ -218,7 +269,7 @@ def ingest_bundle(
         ) from exc
 
     client = QdrantClient(url=qdrant_url, timeout=timeout_s)
-    ensure_collection(
+    collection_stats = ensure_collection(
         client=client,
         collection=collection,
         dim=len(vectors[0]),
@@ -230,15 +281,18 @@ def ingest_bundle(
     bundle_relpath = str(bundle_path.name)
     point_count = 0
 
-    indexed: List[tuple[Dict[str, Any], List[float]]] = list(zip(records, vectors))
+    indexed: List[tuple[Dict[str, Any], Union[int, str], List[float]]] = list(
+        zip(records, point_ids, vectors)
+    )
+    failed_count = 0
     for batch in _chunks(indexed, max(1, int(batch_size))):
         points = [
             models.PointStruct(
-                id=record["stable_id"],
+                id=point_id,
                 vector=vector,
                 payload=_build_payload(record, run_dir=run_dir, bundle_relpath=bundle_relpath),
             )
-            for record, vector in batch
+            for record, point_id, vector in batch
         ]
         client.upsert(collection_name=collection, points=points, wait=True)
         point_count += len(points)
@@ -246,12 +300,16 @@ def ingest_bundle(
     return {
         "records_total": len(rows),
         "records_ingested": point_count,
+        "records_failed": failed_count,
         "records_skipped_missing_id": skipped_missing_id,
+        "records_skipped_invalid_id": skipped_invalid_id,
         "collection": collection,
         "qdrant_url": qdrant_url,
         "bundle_dir": str(bundle_path),
         "embedding_model": _resolve_model_ref(embed_model),
         "embedding_dim": len(vectors[0]),
+        "id_mode": str(id_mode or "uint64").strip().lower(),
+        **collection_stats,
     }
 
 

@@ -404,7 +404,19 @@ def _parse_content_types(value: str | None) -> list[str]:
 def _cmd_qdrant_ingest(args: argparse.Namespace) -> int:
     bundle_dir = Path(args.bundle_dir) if args.bundle_dir else Path(args.run) / "bundle"
     if not bundle_dir.exists():
-        raise SystemExit(f"Bundle directory not found: {bundle_dir}")
+        ingest_records = Path(args.run) / "ingest" / "records.jsonl"
+        if args.bundle_dir is None and ingest_records.exists():
+            bundle_result = bundle_run(
+                run_dir=args.run,
+                include_images=False,
+            )
+            bundle_dir = Path(bundle_result.bundle_dir)
+            print(
+                f"Bundle not found; created bundle at {bundle_result.bundle_dir} "
+                f"from {ingest_records}"
+            )
+        else:
+            raise SystemExit(f"Bundle directory not found: {bundle_dir}")
 
     stats = ingest_bundle(
         bundle_dir=str(bundle_dir),
@@ -414,11 +426,22 @@ def _cmd_qdrant_ingest(args: argparse.Namespace) -> int:
         recreate=args.recreate,
         batch_size=args.batch_size,
         timeout_s=args.timeout_s,
+        id_mode=args.id_mode,
     )
+    collection_state = "existing"
+    if stats.get("collection_recreated"):
+        collection_state = "recreated"
+    elif stats.get("collection_created"):
+        collection_state = "created"
+
     print(
         f"Qdrant ingest complete: collection={stats['collection']} "
+        f"collection_state={collection_state} "
         f"ingested={stats['records_ingested']} total={stats['records_total']} "
-        f"skipped_missing_id={stats['records_skipped_missing_id']}"
+        f"failures={stats.get('records_failed', 0)} "
+        f"skipped_missing_id={stats['records_skipped_missing_id']} "
+        f"skipped_invalid_id={stats.get('records_skipped_invalid_id', 0)} "
+        f"id_mode={stats.get('id_mode', args.id_mode)}"
     )
     return 0
 
@@ -907,6 +930,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=60,
         help="Qdrant HTTP timeout in seconds (default 60)",
+    )
+    qdrant_ingest.add_argument(
+        "--id_mode",
+        choices=["uint64", "uuid"],
+        default="uint64",
+        help="Qdrant point id mode (default uint64)",
     )
     qdrant_ingest.set_defaults(func=_cmd_qdrant_ingest)
 

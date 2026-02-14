@@ -88,7 +88,8 @@ Ingest a run bundle into Qdrant:
 python tools/bookmind_bench/run.py bundle --out <RUN_DIR>
 python tools/bookmind_bench/run.py qdrant-ingest --run <RUN_DIR> \
   --qdrant_url http://127.0.0.1:6333 \
-  --collection bookmind_bench
+  --collection bookmind_bench \
+  --id_mode uint64
 ```
 
 Search:
@@ -111,7 +112,8 @@ python tools/bookmind_bench/run.py qdrant-search --query "..." --content_types t
 python tools/bookmind_bench/run.py bundle --out <RUN_DIR>
 python tools/bookmind_bench/run.py qdrant-ingest --run <RUN_DIR> \
   --qdrant_url http://127.0.0.1:6333 \
-  --collection bookmind_bench
+  --collection bookmind_bench \
+  --id_mode uint64
 ```
 
 2) Start Qdrant (optional local Docker):
@@ -143,6 +145,8 @@ python tools/bookmind_bench/run.py rag-preview \
 
 Notes:
 - Answers are instructed to cite as `[page:stable_id]`.
+- `qdrant-ingest` uses Qdrant-compatible point IDs (`--id_mode uint64|uuid`, default `uint64`).
+- Original `stable_id` is always preserved in payload, so citations remain stable_id-based.
 - Use `--content_types text,table,figure_caption` to filter retrieval scope.
 - Use `--max_context_chars` to bound prompt context size.
 - Use `--show_snippets true` to print retrieved snippet previews in the output.

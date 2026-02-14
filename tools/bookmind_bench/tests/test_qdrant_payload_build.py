@@ -1,6 +1,7 @@
 import json
 import sys
 import types
+import uuid
 from pathlib import Path
 
 import qdrant_ingest
@@ -72,7 +73,7 @@ def test_qdrant_payload_and_point_id(tmp_path, monkeypatch):
     records_path.write_text(
         json.dumps(
             {
-                "stable_id": "sid-001",
+                "stable_id": "dbf3ecf3a5add564",
                 "page": 2,
                 "bbox": [1, 2, 3, 4],
                 "content_type": "figure_caption",
@@ -109,9 +110,10 @@ def test_qdrant_payload_and_point_id(tmp_path, monkeypatch):
     _, points, _ = client.upserts[0]
     point = points[0]
 
-    assert point.id == "sid-001"
+    assert isinstance(point.id, int)
+    assert point.id == int("dbf3ecf3a5add564", 16)
     payload = point.payload
-    assert payload["stable_id"] == "sid-001"
+    assert payload["stable_id"] == "dbf3ecf3a5add564"
     assert payload["page"] == 2
     assert payload["bbox"] == [1, 2, 3, 4]
     assert payload["content_type"] == "figure_caption"
@@ -119,3 +121,15 @@ def test_qdrant_payload_and_point_id(tmp_path, monkeypatch):
     assert payload["meta"]["trace"] == {"a": 1}
     assert payload["meta"]["run_dir"] == str(bundle_dir.parent)
     assert payload["meta"]["bundle_relpath"] == "bundle"
+
+
+def test_qdrant_point_id_from_stable_id_modes() -> None:
+    stable_id = "dbf3ecf3a5add564"
+    point_id_uint64 = qdrant_ingest.qdrant_point_id_from_stable_id(stable_id, mode="uint64")
+    assert isinstance(point_id_uint64, int)
+    assert point_id_uint64 == int(stable_id, 16)
+
+    point_id_uuid = qdrant_ingest.qdrant_point_id_from_stable_id(stable_id, mode="uuid")
+    assert isinstance(point_id_uuid, str)
+    parsed = uuid.UUID(point_id_uuid)
+    assert str(parsed) == point_id_uuid
