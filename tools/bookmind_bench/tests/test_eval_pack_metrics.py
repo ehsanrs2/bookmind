@@ -127,6 +127,7 @@ def test_run_eval_writes_debug_artifact_for_empty_answer(tmp_path: Path, monkeyp
     )
 
     assert results["queries"][0]["answer_text"] == ""
+    assert results["queries"][0]["status"] == "failed"
     debug_path = tmp_path / "per_query" / "q01_raw_provider.json"
     assert debug_path.exists()
     debug_payload = json.loads(debug_path.read_text(encoding="utf-8"))
@@ -146,22 +147,59 @@ def test_run_eval_generation_exception_includes_debug_artifact(tmp_path: Path, m
     monkeypatch.setattr(eval_pack, "search_query", _fake_search_query)
     monkeypatch.setattr(eval_pack, "build_vlm_provider", lambda **kwargs: _FakeProvider())
 
-    try:
-        eval_pack.run_eval(
-            queries=queries,
-            qdrant_url="http://127.0.0.1:6333",
-            collection="bookmind_bench",
-            backend_cfg={"backend": "ollama"},
-            retrieval_cfg={},
-            gen_cfg={},
-            output_dir=tmp_path,
-        )
-        raise AssertionError("Expected RuntimeError for generation exception")
-    except RuntimeError as exc:
-        assert "Generation failed for query 'q1'" in str(exc)
+    results = eval_pack.run_eval(
+        queries=queries,
+        qdrant_url="http://127.0.0.1:6333",
+        collection="bookmind_bench",
+        backend_cfg={"backend": "ollama"},
+        retrieval_cfg={},
+        gen_cfg={},
+        output_dir=tmp_path,
+    )
+    assert results["queries"][0]["status"] == "failed"
+    assert results["summary"]["failed_queries"] == 1
 
     debug_path = tmp_path / "per_query" / "q01_raw_provider.json"
     assert debug_path.exists()
     debug_payload = json.loads(debug_path.read_text(encoding="utf-8"))
     assert debug_payload["issue"] == "generation_exception"
     assert debug_payload["error_type"] == "ValueError"
+
+
+def test_run_eval_writes_ollama_attempt_artifacts_on_failure(tmp_path: Path, monkeypatch) -> None:
+    queries = [{"id": "q1", "query": "Explain", "expected_pages": [1]}]
+
+    def _fake_search_query(**kwargs):
+        return [{"stable_id": "t1", "page": 1, "content_type": "text", "text": "ctx", "meta": {}}]
+
+    class _FakeProvider:
+        pass
+
+    def _fake_generate_answer(provider, messages, max_tokens, temperature, ollama_debug_hook=None):
+        if ollama_debug_hook is not None:
+            ollama_debug_hook({"request": {"model": "m0"}, "response": {"answer_len_chars": 0}})
+            ollama_debug_hook({"request": {"model": "m1"}, "response": {"answer_len_chars": 0}})
+            ollama_debug_hook({"request": {"model": "m2"}, "response": {"answer_len_chars": 0}})
+        raise RuntimeError("Ollama generation failed after retries")
+
+    monkeypatch.setattr(eval_pack, "search_query", _fake_search_query)
+    monkeypatch.setattr(eval_pack, "build_vlm_provider", lambda **kwargs: _FakeProvider())
+    monkeypatch.setattr(eval_pack, "generate_answer", _fake_generate_answer)
+
+    results = eval_pack.run_eval(
+        queries=queries,
+        qdrant_url="http://127.0.0.1:6333",
+        collection="bookmind_bench",
+        backend_cfg={"backend": "ollama"},
+        retrieval_cfg={},
+        gen_cfg={},
+        output_dir=tmp_path,
+    )
+
+    assert results["queries"][0]["status"] == "failed"
+    assert (tmp_path / "per_query" / "q01_ollama_request.json").exists()
+    assert (tmp_path / "per_query" / "q01_ollama_response.json").exists()
+    assert (tmp_path / "per_query" / "q01_attempt1_request.json").exists()
+    assert (tmp_path / "per_query" / "q01_attempt1_response.json").exists()
+    assert (tmp_path / "per_query" / "q01_attempt2_request.json").exists()
+    assert (tmp_path / "per_query" / "q01_attempt2_response.json").exists()

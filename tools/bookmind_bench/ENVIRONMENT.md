@@ -195,6 +195,20 @@ Output artifacts:
 - `eval/report.md`: concise summary with per-query bullets, slowest queries,
   and lowest-citation queries
 - `eval/items/<query-id>.json`: per-query artifact for diffs/regressions
+- `eval/per_query/qNN_raw_provider.json`: provider issue details on failures
+  (`generation_exception` / `empty_answer`)
+- `eval/per_query/qNN_ollama_request.json` + `qNN_ollama_response.json`:
+  first Ollama attempt request/response debug (on empty/failure)
+- `eval/per_query/qNN_attempt1_*.json`, `qNN_attempt2_*.json`:
+  retry request/response debug snapshots (on empty/failure)
+
+Ollama empty-answer retry behavior:
+- Initial request uses configured generation settings.
+- Retry 1 reduces retrieved context in the prompt to a shorter context window.
+- Retry 2 also simplifies the system instruction and uses safer generation
+  settings (`temperature=0.0`, `max_tokens<=256`).
+- If all attempts still return empty/whitespace (or provider errors), the query
+  is marked `status=failed` with `failure_reason` and artifacts are preserved.
 
 Heuristic note:
 - `--heuristic_boost_figures true` (default) moves `figure_caption` retrievals

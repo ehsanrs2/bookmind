@@ -2,17 +2,27 @@
 
 from __future__ import annotations
 
+import copy
 import json
+import time
 import urllib.request
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import requests
 
-from engines.vlm_providers import OllamaProvider, OpenAICompatProvider
+from engines.vlm_providers import (
+    OllamaProvider,
+    OpenAICompatProvider,
+    extract_ollama_usage,
+    parse_ollama_chat_payload,
+)
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are a technical assistant. Provide concise, factual answers grounded in the "
     "provided document context."
+)
+OLLAMA_RETRY_SYSTEM_PROMPT = (
+    "Answer only from retrieved context. If context is insufficient, say so plainly."
 )
 
 
@@ -117,11 +127,87 @@ def build_rag_messages(query: str, context_text: str) -> List[Dict[str, str]]:
     ]
 
 
+def _truncate_rag_user_context(content: str, max_context_chars: int) -> str:
+    marker_start = "Retrieved context:\n```\n"
+    marker_end = "\n```"
+    text = str(content or "")
+    start_idx = text.find(marker_start)
+    if start_idx < 0:
+        return _truncate_text(text, max_context_chars)
+    context_start = start_idx + len(marker_start)
+    end_idx = text.find(marker_end, context_start)
+    if end_idx < 0:
+        return _truncate_text(text, max_context_chars)
+    context_body = text[context_start:end_idx]
+    if len(context_body) <= max_context_chars:
+        return text
+    truncated = _truncate_text(context_body, max_context_chars)
+    return text[:context_start] + truncated + text[end_idx:]
+
+
+def _prepare_ollama_retry_messages(
+    messages: Sequence[Dict[str, str]],
+    *,
+    context_limit: Optional[int] = None,
+    simplify_system_prompt: bool = False,
+) -> List[Dict[str, str]]:
+    prepared: List[Dict[str, str]] = [copy.deepcopy(dict(msg)) for msg in messages]
+    if simplify_system_prompt:
+        for msg in prepared:
+            if str(msg.get("role") or "") == "system":
+                msg["content"] = OLLAMA_RETRY_SYSTEM_PROMPT
+                break
+    if context_limit is not None and context_limit > 0:
+        for msg in prepared:
+            if str(msg.get("role") or "") == "user":
+                user_content = msg.get("content")
+                if isinstance(user_content, str):
+                    msg["content"] = _truncate_rag_user_context(
+                        user_content, max_context_chars=context_limit
+                    )
+                break
+    return prepared
+
+
+def _ollama_header_subset(headers: Any) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    keys = (
+        "content-type",
+        "content-length",
+        "date",
+        "server",
+        "x-request-id",
+        "x-ollama-model",
+        "x-ollama-version",
+    )
+    header_items = {}
+    if hasattr(headers, "items"):
+        try:
+            header_items = {str(k).lower(): str(v) for k, v in headers.items()}
+        except Exception:
+            header_items = {}
+    for key in keys:
+        value = header_items.get(key)
+        if value is not None:
+            out[key] = value
+    return out
+
+
+def _decode_ollama_response(response: requests.Response) -> Any:
+    try:
+        return response.json()
+    except Exception:
+        raw_text = response.text
+        parsed = parse_ollama_chat_payload(raw_text)
+        return parsed.get("raw")
+
+
 def generate_answer(
     provider: Any,
     messages: Sequence[Dict[str, str]],
     max_tokens: int = 512,
     temperature: float = 0.2,
+    ollama_debug_hook: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Tuple[str, Optional[Dict[str, Any]]]:
     if hasattr(provider, "chat") and callable(provider.chat):
         return provider.chat(messages=messages, max_tokens=max_tokens, temperature=temperature)
@@ -157,47 +243,103 @@ def generate_answer(
         return content.strip(), usage
 
     if isinstance(provider, OllamaProvider):
-        payload = {
-            "model": provider.model,
-            "messages": list(messages),
-            "stream": False,
-            "options": {
-                "num_predict": max_tokens,
-                "temperature": temperature,
+        attempts = [
+            {
+                "name": "initial",
+                "context_limit": None,
+                "max_tokens": int(max_tokens),
+                "temperature": float(temperature),
+                "simplify_system_prompt": False,
             },
-        }
-        response = requests.post(
-            provider.ollama_url + "/api/chat",
-            json=payload,
-            timeout=provider.timeout_s,
-        )
-        response.raise_for_status()
-        parsed = response.json()
-        content: Optional[str] = None
-        message = parsed.get("message")
-        if isinstance(message, dict):
-            message_content = message.get("content")
-            if isinstance(message_content, str):
-                content = message_content
-        if content is None:
-            response_text = parsed.get("response")
-            if isinstance(response_text, str):
-                content = response_text
-        if content is None:
-            keys = sorted(str(key) for key in parsed.keys()) if isinstance(parsed, dict) else []
-            raise ValueError(
-                "Ollama response missing assistant content "
-                "(expected message.content or response). "
-                f"response_keys={keys}"
+            {
+                "name": "retry_context_reduced",
+                "context_limit": 2500,
+                "max_tokens": int(max_tokens),
+                "temperature": float(temperature),
+                "simplify_system_prompt": False,
+            },
+            {
+                "name": "retry_safe_prompt",
+                "context_limit": 2500,
+                "max_tokens": min(int(max_tokens), 256),
+                "temperature": 0.0,
+                "simplify_system_prompt": True,
+            },
+        ]
+        last_error: Optional[Exception] = None
+        for attempt_index, attempt in enumerate(attempts):
+            attempt_messages = _prepare_ollama_retry_messages(
+                messages,
+                context_limit=attempt["context_limit"],
+                simplify_system_prompt=attempt["simplify_system_prompt"],
             )
-        usage = {
-            "prompt_eval_count": parsed.get("prompt_eval_count"),
-            "eval_count": parsed.get("eval_count"),
-            "prompt_eval_duration": parsed.get("prompt_eval_duration"),
-            "eval_duration": parsed.get("eval_duration"),
-            "total_duration": parsed.get("total_duration"),
-        }
-        return content.strip(), usage
+            options = {
+                "num_predict": attempt["max_tokens"],
+                "temperature": attempt["temperature"],
+                "num_ctx": 4096,
+            }
+            payload = {
+                "model": provider.model,
+                "messages": attempt_messages,
+                "stream": False,
+                "options": options,
+            }
+            attempt_debug: Dict[str, Any] = {
+                "attempt_index": attempt_index,
+                "attempt_name": attempt["name"],
+                "request": payload,
+            }
+            started = time.perf_counter()
+            response = None
+            parsed: Any = None
+            try:
+                response = requests.post(
+                    provider.ollama_url + "/api/chat",
+                    json=payload,
+                    timeout=provider.timeout_s,
+                )
+                attempt_debug["http_status"] = int(response.status_code)
+                attempt_debug["response_headers"] = _ollama_header_subset(response.headers)
+                response.raise_for_status()
+                parsed = _decode_ollama_response(response)
+                parsed_payload = parse_ollama_chat_payload(parsed)
+                content = parsed_payload.get("answer_text")
+                cleaned = str(content or "").strip()
+                usage = extract_ollama_usage(parsed)
+                attempt_debug["response"] = {
+                    "raw": parsed_payload.get("raw"),
+                    "parsed_keys": parsed_payload.get("parsed_keys"),
+                    "content_source": parsed_payload.get("source"),
+                    "done_reason": parsed_payload.get("done_reason"),
+                    "provider_error": parsed_payload.get("error"),
+                    "answer_len_chars": len(cleaned),
+                    "usage": usage,
+                }
+                if cleaned:
+                    usage_with_attempt = dict(usage)
+                    usage_with_attempt["attempt_index"] = attempt_index
+                    usage_with_attempt["attempt_name"] = attempt["name"]
+                    return cleaned, usage_with_attempt
+                last_error = RuntimeError(
+                    "Ollama returned empty/whitespace answer "
+                    f"(attempt={attempt['name']} index={attempt_index})"
+                )
+                attempt_debug["response"]["empty_answer"] = True
+            except Exception as exc:
+                last_error = exc
+                attempt_debug["response"] = {
+                    "raw": parsed,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            finally:
+                elapsed_ms = int(round((time.perf_counter() - started) * 1000))
+                attempt_debug["timing_ms"] = elapsed_ms
+                if ollama_debug_hook is not None:
+                    ollama_debug_hook(attempt_debug)
+        raise RuntimeError(
+            "Ollama generation failed after retries; see saved attempt request/response artifacts."
+        ) from last_error
 
     raise TypeError(f"Unsupported provider type for RAG preview: {type(provider)!r}")
 

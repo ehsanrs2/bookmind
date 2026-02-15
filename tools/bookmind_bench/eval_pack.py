@@ -50,6 +50,38 @@ def _write_provider_debug(
     _write_json(per_query_dir / f"{query_prefix}_raw_provider.json", payload)
 
 
+def _write_ollama_attempt_artifacts(
+    *,
+    per_query_dir: Path,
+    query_prefix: str,
+    attempts: Sequence[Dict[str, Any]],
+) -> None:
+    if not attempts:
+        return
+    first = attempts[0] if isinstance(attempts[0], dict) else {}
+    _write_json(
+        per_query_dir / f"{query_prefix}_ollama_request.json",
+        first.get("request") if isinstance(first.get("request"), dict) else {"raw": first.get("request")},
+    )
+    _write_json(
+        per_query_dir / f"{query_prefix}_ollama_response.json",
+        first if isinstance(first, dict) else {"raw": first},
+    )
+    for idx, attempt in enumerate(attempts[1:], start=1):
+        if not isinstance(attempt, dict):
+            continue
+        _write_json(
+            per_query_dir / f"{query_prefix}_attempt{idx}_request.json",
+            attempt.get("request")
+            if isinstance(attempt.get("request"), dict)
+            else {"raw": attempt.get("request")},
+        )
+        _write_json(
+            per_query_dir / f"{query_prefix}_attempt{idx}_response.json",
+            attempt,
+        )
+
+
 def load_queries(path: str | Path) -> List[Dict[str, Any]]:
     query_path = Path(path)
     suffix = query_path.suffix.lower()
@@ -160,6 +192,8 @@ def run_eval(
     citation_count_values: List[int] = []
     any_citation_count = 0
     hit_pages_values: List[int] = []
+    failed_queries = 0
+    backend_name = str(backend_cfg.get("backend") or "").strip().lower()
 
     for index, query_item in enumerate(queries, start=1):
         query_id = str(query_item.get("id") or f"q{index}")
@@ -194,26 +228,33 @@ def run_eval(
 
         t2 = time.perf_counter()
         usage: Optional[Dict[str, Any]]
+        generation_error: Optional[Exception] = None
+        ollama_attempts: List[Dict[str, Any]] = []
+        hook = ollama_attempts.append if backend_name == "ollama" else None
         try:
             raw_answer_text, usage = generate_answer(
                 provider=provider,
                 messages=messages,
                 max_tokens=int(gen_cfg.get("max_tokens", 512)),
                 temperature=float(gen_cfg.get("temperature", 0.2)),
+                ollama_debug_hook=hook,
             )
         except Exception as exc:
+            raw_answer_text = ""
+            usage = None
+            generation_error = exc
+
+        answer_text = str(raw_answer_text or "").strip()
+        if generation_error is not None:
             _write_provider_debug(
                 per_query_dir=per_query_dir,
                 query_prefix=per_query_prefix,
                 query_id=query_id,
                 issue="generation_exception",
-                usage=None,
-                error=exc,
+                usage=usage,
+                error=generation_error,
             )
-            raise RuntimeError(f"Generation failed for query '{query_id}': {exc}") from exc
-
-        answer_text = str(raw_answer_text or "").strip()
-        if not answer_text:
+        elif not answer_text:
             _write_provider_debug(
                 per_query_dir=per_query_dir,
                 query_prefix=per_query_prefix,
@@ -221,6 +262,12 @@ def run_eval(
                 issue="empty_answer",
                 usage=usage,
                 error=None,
+            )
+        if backend_name == "ollama" and (generation_error is not None or not answer_text):
+            _write_ollama_attempt_artifacts(
+                per_query_dir=per_query_dir,
+                query_prefix=per_query_prefix,
+                attempts=ollama_attempts,
             )
         t3 = time.perf_counter()
 
@@ -248,6 +295,16 @@ def run_eval(
         answer_len_chars = len(answer_text)
         citation_count = len(citation_rows)
         citation_rate = _citation_rate(answer_text)
+        status = "ok"
+        failure_reason: Optional[str] = None
+        if generation_error is not None:
+            status = "failed"
+            failure_reason = str(generation_error)
+            failed_queries += 1
+        elif not answer_text:
+            status = "failed"
+            failure_reason = "Empty answer from provider"
+            failed_queries += 1
 
         if citation_count > 0:
             any_citation_count += 1
@@ -273,6 +330,8 @@ def run_eval(
             "citations": citation_rows,
             "retrieved_ids": retrieved_ids,
             "usage": usage,
+            "status": status,
+            "failure_reason": failure_reason,
         }
         rows.append(row)
         _write_json(items_dir / f"{query_id}.json", row)
@@ -308,6 +367,7 @@ def run_eval(
         "percent_queries_with_any_citation": round((any_citation_count / count_queries) * 100.0, 3)
         if count_queries
         else 0.0,
+        "failed_queries": failed_queries,
     }
     if hit_pages_values:
         summary["hit@k_pages"] = round((sum(hit_pages_values) / len(hit_pages_values)) * 100.0, 3)
@@ -358,6 +418,7 @@ def _report_lines(results: Dict[str, Any]) -> List[str]:
         "avg_answer_len_chars",
         "avg_num_citations",
         "percent_queries_with_any_citation",
+        "failed_queries",
         "hit@k_pages",
         "expected_pages_evaluable_queries",
     ):
@@ -373,8 +434,10 @@ def _report_lines(results: Dict[str, Any]) -> List[str]:
         lines.append(
             f"- {row.get('id')}: total_ms={timings.get('total_ms')} "
             f"citations={row.get('citation_count')} citation_rate={row.get('citation_rate')} "
-            f"answer_len={row.get('answer_len_chars')}"
+            f"answer_len={row.get('answer_len_chars')} status={row.get('status')}"
         )
+        if row.get("failure_reason"):
+            lines.append(f"  failure_reason: {row.get('failure_reason')}")
         lines.append(f"  query: {row.get('query')}")
         lines.append(f"  retrieved_ids: {row.get('retrieved_ids')}")
         lines.append(f"  citations: {row.get('citations')}")
