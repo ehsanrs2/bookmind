@@ -90,3 +90,57 @@ def test_generate_answer_ollama(monkeypatch) -> None:
     assert usage is not None
     assert usage["prompt_eval_count"] == 11
     assert usage["eval_count"] == 12
+
+
+def test_generate_answer_ollama_response_fallback(monkeypatch) -> None:
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {
+                "response": "ollama fallback answer",
+                "prompt_eval_count": 7,
+                "eval_count": 9,
+            }
+
+    def _fake_post(url, json=None, timeout=60):
+        assert url == "http://127.0.0.1:11434/api/chat"
+        return _FakeResponse()
+
+    monkeypatch.setattr(requests, "post", _fake_post)
+
+    provider = OllamaProvider(ollama_url="http://127.0.0.1:11434", model="qwen3-vl:latest")
+    text, usage = generate_answer(
+        provider=provider,
+        messages=[{"role": "user", "content": "Q"}],
+    )
+
+    assert text == "ollama fallback answer"
+    assert usage is not None
+    assert usage["eval_count"] == 9
+
+
+def test_generate_answer_ollama_malformed_raises(monkeypatch) -> None:
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {"unexpected": True}
+
+    def _fake_post(url, json=None, timeout=60):
+        assert url == "http://127.0.0.1:11434/api/chat"
+        return _FakeResponse()
+
+    monkeypatch.setattr(requests, "post", _fake_post)
+
+    provider = OllamaProvider(ollama_url="http://127.0.0.1:11434", model="qwen3-vl:latest")
+    try:
+        generate_answer(
+            provider=provider,
+            messages=[{"role": "user", "content": "Q"}],
+        )
+        raise AssertionError("Expected ValueError for malformed Ollama response")
+    except ValueError as exc:
+        assert "missing assistant content" in str(exc)

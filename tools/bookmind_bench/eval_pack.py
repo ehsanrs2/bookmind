@@ -30,6 +30,26 @@ def _write_json(path: Path, payload: Dict[str, Any]) -> None:
         handle.write("\n")
 
 
+def _write_provider_debug(
+    *,
+    per_query_dir: Path,
+    query_prefix: str,
+    query_id: str,
+    issue: str,
+    usage: Optional[Dict[str, Any]],
+    error: Optional[Exception] = None,
+) -> None:
+    payload: Dict[str, Any] = {
+        "id": query_id,
+        "issue": issue,
+        "usage": usage if isinstance(usage, dict) else None,
+    }
+    if error is not None:
+        payload["error_type"] = type(error).__name__
+        payload["error"] = str(error)
+    _write_json(per_query_dir / f"{query_prefix}_raw_provider.json", payload)
+
+
 def load_queries(path: str | Path) -> List[Dict[str, Any]]:
     query_path = Path(path)
     suffix = query_path.suffix.lower()
@@ -145,6 +165,7 @@ def run_eval(
         query_id = str(query_item.get("id") or f"q{index}")
         query_text = str(query_item.get("query") or "")
         expected_pages = query_item.get("expected_pages")
+        per_query_prefix = f"q{index:02d}"
 
         t0 = time.perf_counter()
         retrieved = search_query(
@@ -172,13 +193,35 @@ def run_eval(
         messages = build_rag_messages(query_text, context_text)
 
         t2 = time.perf_counter()
-        raw_answer_text, usage = generate_answer(
-            provider=provider,
-            messages=messages,
-            max_tokens=int(gen_cfg.get("max_tokens", 512)),
-            temperature=float(gen_cfg.get("temperature", 0.2)),
-        )
+        usage: Optional[Dict[str, Any]]
+        try:
+            raw_answer_text, usage = generate_answer(
+                provider=provider,
+                messages=messages,
+                max_tokens=int(gen_cfg.get("max_tokens", 512)),
+                temperature=float(gen_cfg.get("temperature", 0.2)),
+            )
+        except Exception as exc:
+            _write_provider_debug(
+                per_query_dir=per_query_dir,
+                query_prefix=per_query_prefix,
+                query_id=query_id,
+                issue="generation_exception",
+                usage=None,
+                error=exc,
+            )
+            raise RuntimeError(f"Generation failed for query '{query_id}': {exc}") from exc
+
         answer_text = str(raw_answer_text or "").strip()
+        if not answer_text:
+            _write_provider_debug(
+                per_query_dir=per_query_dir,
+                query_prefix=per_query_prefix,
+                query_id=query_id,
+                issue="empty_answer",
+                usage=usage,
+                error=None,
+            )
         t3 = time.perf_counter()
 
         retrieval_ms = (t1 - t0) * 1000.0
@@ -233,7 +276,6 @@ def run_eval(
         }
         rows.append(row)
         _write_json(items_dir / f"{query_id}.json", row)
-        per_query_prefix = f"q{index:02d}"
         (per_query_dir / f"{per_query_prefix}_answer.txt").write_text(
             answer_text + "\n",
             encoding="utf-8",

@@ -125,12 +125,23 @@ class OllamaProvider(VLMProvider):
         elapsed_ms = int(round((time.perf_counter() - start) * 1000))
         response.raise_for_status()
         parsed = response.json()
+        content: Optional[str] = None
         message = parsed.get("message")
-        if not isinstance(message, dict):
-            raise ValueError("Ollama response missing message")
-        content = message.get("content")
-        if not isinstance(content, str):
-            raise ValueError("Ollama response missing content")
+        if isinstance(message, dict):
+            message_content = message.get("content")
+            if isinstance(message_content, str):
+                content = message_content
+        if content is None:
+            response_text = parsed.get("response")
+            if isinstance(response_text, str):
+                content = response_text
+        if content is None:
+            keys = sorted(str(key) for key in parsed.keys()) if isinstance(parsed, dict) else []
+            raise ValueError(
+                "Ollama response missing assistant content "
+                "(expected message.content or response). "
+                f"response_keys={keys}"
+            )
         usage = {
             "prompt_eval_count": parsed.get("prompt_eval_count"),
             "eval_count": parsed.get("eval_count"),
@@ -157,4 +168,3 @@ def build_vlm_provider(
     if backend_norm == "vllm":
         return OpenAICompatProvider(endpoint=endpoint, model=model, timeout_s=timeout_s)
     raise ValueError(f"Unsupported VLM backend: {backend}")
-

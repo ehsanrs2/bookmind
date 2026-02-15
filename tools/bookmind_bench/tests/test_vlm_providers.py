@@ -88,6 +88,39 @@ def test_ollama_provider_caption(monkeypatch, tmp_path: Path) -> None:
     assert "timing_ms" in usage
 
 
+def test_ollama_provider_caption_response_fallback(monkeypatch, tmp_path: Path) -> None:
+    image = tmp_path / "crop.png"
+    image.write_bytes(b"png-bytes")
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {
+                "response": "ollama caption fallback",
+                "prompt_eval_count": 1,
+                "eval_count": 2,
+            }
+
+    def _fake_post(url, json=None, timeout=60):
+        assert url == "http://127.0.0.1:11434/api/chat"
+        return _FakeResponse()
+
+    monkeypatch.setattr(requests, "post", _fake_post)
+
+    provider = OllamaProvider(ollama_url="http://127.0.0.1:11434", model="qwen3-vl:latest")
+    text, usage = provider.caption(
+        image_path=str(image),
+        prompt="Describe this figure",
+        max_tokens=64,
+        temperature=0.1,
+    )
+    assert text == "ollama caption fallback"
+    assert usage is not None
+    assert usage["eval_count"] == 2
+
+
 def test_provider_factory_backend_switch() -> None:
     vllm_provider = build_vlm_provider(
         backend="vllm",

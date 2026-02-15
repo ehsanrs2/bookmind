@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import eval_pack
@@ -92,7 +93,75 @@ def test_run_eval_computes_summary_metrics(tmp_path: Path, monkeypatch) -> None:
 
     assert (tmp_path / "items" / "q1.json").exists()
     assert (tmp_path / "items" / "q2.json").exists()
-    assert (tmp_path / "per_query" / "q01_answer.txt").exists()
+    answer_q1_path = tmp_path / "per_query" / "q01_answer.txt"
+    assert answer_q1_path.exists()
+    assert answer_q1_path.read_text(encoding="utf-8").strip()
     assert (tmp_path / "per_query" / "q01_citations.json").exists()
-    assert (tmp_path / "per_query" / "q02_answer.txt").exists()
+    answer_q2_path = tmp_path / "per_query" / "q02_answer.txt"
+    assert answer_q2_path.exists()
+    assert answer_q2_path.read_text(encoding="utf-8").strip()
     assert (tmp_path / "per_query" / "q02_citations.json").exists()
+
+
+def test_run_eval_writes_debug_artifact_for_empty_answer(tmp_path: Path, monkeypatch) -> None:
+    queries = [{"id": "q1", "query": "Explain", "expected_pages": [1]}]
+
+    def _fake_search_query(**kwargs):
+        return [{"stable_id": "t1", "page": 1, "content_type": "text", "text": "ctx", "meta": {}}]
+
+    class _FakeProvider:
+        def chat(self, messages, max_tokens, temperature):
+            return "   ", {"total_tokens": 5}
+
+    monkeypatch.setattr(eval_pack, "search_query", _fake_search_query)
+    monkeypatch.setattr(eval_pack, "build_vlm_provider", lambda **kwargs: _FakeProvider())
+
+    results = eval_pack.run_eval(
+        queries=queries,
+        qdrant_url="http://127.0.0.1:6333",
+        collection="bookmind_bench",
+        backend_cfg={"backend": "ollama"},
+        retrieval_cfg={},
+        gen_cfg={},
+        output_dir=tmp_path,
+    )
+
+    assert results["queries"][0]["answer_text"] == ""
+    debug_path = tmp_path / "per_query" / "q01_raw_provider.json"
+    assert debug_path.exists()
+    debug_payload = json.loads(debug_path.read_text(encoding="utf-8"))
+    assert debug_payload["issue"] == "empty_answer"
+
+
+def test_run_eval_generation_exception_includes_debug_artifact(tmp_path: Path, monkeypatch) -> None:
+    queries = [{"id": "q1", "query": "Explain", "expected_pages": [1]}]
+
+    def _fake_search_query(**kwargs):
+        return [{"stable_id": "t1", "page": 1, "content_type": "text", "text": "ctx", "meta": {}}]
+
+    class _FakeProvider:
+        def chat(self, messages, max_tokens, temperature):
+            raise ValueError("bad provider payload")
+
+    monkeypatch.setattr(eval_pack, "search_query", _fake_search_query)
+    monkeypatch.setattr(eval_pack, "build_vlm_provider", lambda **kwargs: _FakeProvider())
+
+    try:
+        eval_pack.run_eval(
+            queries=queries,
+            qdrant_url="http://127.0.0.1:6333",
+            collection="bookmind_bench",
+            backend_cfg={"backend": "ollama"},
+            retrieval_cfg={},
+            gen_cfg={},
+            output_dir=tmp_path,
+        )
+        raise AssertionError("Expected RuntimeError for generation exception")
+    except RuntimeError as exc:
+        assert "Generation failed for query 'q1'" in str(exc)
+
+    debug_path = tmp_path / "per_query" / "q01_raw_provider.json"
+    assert debug_path.exists()
+    debug_payload = json.loads(debug_path.read_text(encoding="utf-8"))
+    assert debug_payload["issue"] == "generation_exception"
+    assert debug_payload["error_type"] == "ValueError"
