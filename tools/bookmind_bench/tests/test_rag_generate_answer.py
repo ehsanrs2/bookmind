@@ -317,30 +317,49 @@ def test_generate_answer_ollama_uses_custom_num_predict_values(monkeypatch) -> N
     assert attempts[1]["request"]["options"]["num_predict"] == 1337
 
 
-def test_generate_answer_ollama_retries_exhausted_uses_thinking_fallback(monkeypatch) -> None:
+def test_generate_answer_ollama_extractor_recovers_when_retry_empty_with_thinking(monkeypatch) -> None:
     class _FakeResponse:
-        def __init__(self):
+        def __init__(self, payload):
             self.status_code = 200
             self.headers = {"Content-Type": "application/json"}
+            self._payload = payload
 
         def raise_for_status(self) -> None:
             return None
 
         def json(self):
-            return {
-                "message": {"content": " \n\t", "thinking": "still thinking"},
-                "eval_count": 512,
-                "prompt_eval_count": 33,
-                "done_reason": "length",
-            }
+            return self._payload
 
+    payloads = [
+        {
+            "message": {"content": " \n\t", "thinking": "thinking attempt 1"},
+            "eval_count": 512,
+            "prompt_eval_count": 33,
+            "done_reason": "length",
+        },
+        {
+            "message": {"content": " \n\t", "thinking": "thinking attempt 2"},
+            "eval_count": 512,
+            "prompt_eval_count": 44,
+            "done_reason": "length",
+        },
+        {
+            "message": {
+                "content": '{"answer":"final recovered answer","citations":[{"page":3,"stable_id":"sid-3"}]}'
+            },
+            "eval_count": 120,
+            "prompt_eval_count": 21,
+        },
+    ]
     calls = {"count": 0}
 
     def _fake_post(url, json=None, timeout=60):
+        idx = calls["count"]
         calls["count"] += 1
-        return _FakeResponse()
+        return _FakeResponse(payloads[idx])
 
     monkeypatch.setattr(requests, "post", _fake_post)
+    attempts = []
     provider = OllamaProvider(
         ollama_url="http://127.0.0.1:11434",
         model="qwen3-vl:latest",
@@ -349,13 +368,19 @@ def test_generate_answer_ollama_retries_exhausted_uses_thinking_fallback(monkeyp
     text, usage = generate_answer(
         provider=provider,
         messages=[{"role": "system", "content": "s"}, {"role": "user", "content": "Q"}],
-        fallback_citations=[{"page": 3, "stable_id": "sid-3"}],
+        ollama_debug_hook=attempts.append,
     )
-    assert "still thinking" in text
-    assert "[3:sid-3]" in text
+    assert text == "final recovered answer"
+    assert "thinking attempt 1" not in text
+    assert "thinking attempt 2" not in text
     assert usage is not None
-    assert usage.get("fallback_from_thinking") is True
-    assert calls["count"] == 2
+    assert usage["attempt_name"] == "extractor_json_only"
+    assert calls["count"] == 3
+    assert len(attempts) == 3
+    assert attempts[0]["request"]["options"]["num_predict"] == 1536
+    assert attempts[1]["request"]["options"]["num_predict"] == 2048
+    assert attempts[2]["request"]["options"]["num_predict"] == 512
+    assert attempts[2]["request"]["options"]["temperature"] == 0.0
 
 
 def test_generate_answer_ollama_retries_exhausted_raises_without_thinking(monkeypatch) -> None:

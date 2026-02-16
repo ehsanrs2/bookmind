@@ -11,7 +11,12 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from engines.vlm_providers import build_vlm_provider
 from qdrant_ingest import search_query
-from rag_preview import build_context, build_rag_messages, generate_answer
+from rag_preview import (
+    build_context,
+    build_rag_messages,
+    generate_answer,
+    write_ollama_attempt_artifacts,
+)
 
 FIGURE_BOOST_TOKENS = (
     "figure",
@@ -48,39 +53,6 @@ def _write_provider_debug(
         payload["error_type"] = type(error).__name__
         payload["error"] = str(error)
     _write_json(per_query_dir / f"{query_prefix}_raw_provider.json", payload)
-
-
-def _write_ollama_attempt_artifacts(
-    *,
-    per_query_dir: Path,
-    query_prefix: str,
-    attempts: Sequence[Dict[str, Any]],
-) -> None:
-    if not attempts:
-        return
-    first = attempts[0] if isinstance(attempts[0], dict) else {}
-    _write_json(
-        per_query_dir / f"{query_prefix}_ollama_request.json",
-        first.get("request") if isinstance(first.get("request"), dict) else {"raw": first.get("request")},
-    )
-    _write_json(
-        per_query_dir / f"{query_prefix}_ollama_response.json",
-        first if isinstance(first, dict) else {"raw": first},
-    )
-    for idx, attempt in enumerate(attempts[1:], start=1):
-        if not isinstance(attempt, dict):
-            continue
-        suffix = "retry" if idx == 1 else f"retry{idx}"
-        _write_json(
-            per_query_dir / f"{query_prefix}_{suffix}_request.json",
-            attempt.get("request")
-            if isinstance(attempt.get("request"), dict)
-            else {"raw": attempt.get("request")},
-        )
-        _write_json(
-            per_query_dir / f"{query_prefix}_{suffix}_response.json",
-            attempt,
-        )
 
 
 def load_queries(path: str | Path) -> List[Dict[str, Any]]:
@@ -274,7 +246,7 @@ def run_eval(
                 error=None,
             )
         if backend_name == "ollama" and (generation_error is not None or not answer_text):
-            _write_ollama_attempt_artifacts(
+            write_ollama_attempt_artifacts(
                 per_query_dir=per_query_dir,
                 query_prefix=per_query_prefix,
                 attempts=ollama_attempts,
@@ -398,6 +370,8 @@ def run_eval(
             "generation": {
                 "max_tokens": int(gen_cfg.get("max_tokens", 512)),
                 "temperature": float(gen_cfg.get("temperature", 0.2)),
+                "ollama_num_predict": int(gen_cfg.get("ollama_num_predict", 1536)),
+                "ollama_retry_num_predict": int(gen_cfg.get("ollama_retry_num_predict", 2048)),
             },
         },
         "summary": summary,

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import copy
 import json
-import re
 import time
 import urllib.request
+from pathlib import Path
+from tempfile import mkdtemp
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import requests
@@ -23,16 +24,9 @@ DEFAULT_SYSTEM_PROMPT = (
     "provided document context."
 )
 OLLAMA_RETRY_SYSTEM_PROMPT = (
-    "Return ONLY the JSON object. Do not include analysis or thoughts. Output JSON immediately. "
+    "Do not think aloud. Output JSON only in content. "
     'JSON shape: {"answer":"...","citations":[{"page":1,"stable_id":"..."}]}. '
     "No markdown or extra keys."
-)
-_THINKING_PREFERRED_MARKERS = (
-    "answer should be",
-    "final answer",
-    "in summary",
-    "therefore",
-    "figure",
 )
 
 
@@ -123,10 +117,12 @@ def _rag_user_instructions_json() -> str:
         "Instructions:\n"
         "- Answer using only the provided context.\n"
         "- If the context is insufficient, explicitly say context is insufficient.\n"
-        "- Return ONLY valid JSON in this exact shape:\n"
+        "- Return a SINGLE JSON object in the assistant final message content:\n"
         '{"answer":"...","citations":[{"page":1,"stable_id":"..."}]}\n'
+        "- No extra keys.\n"
+        "- No markdown.\n"
+        "- No prose outside JSON.\n"
         "- Keep answer concise.\n"
-        "- Do not use markdown code fences.\n"
         "- citations may be an empty list."
     )
 
@@ -329,98 +325,131 @@ def _compact_json(value: Any, limit: int = 2000) -> str:
     return text[: max(0, limit - 3)] + "..."
 
 
-def _extract_stable_ids_from_thinking(thinking_text: str) -> List[str]:
-    text = str(thinking_text or "")
-    ids: List[str] = []
-    seen: set[str] = set()
-    patterns = (
-        re.compile(r"stable[_\s-]*id\s*[:=]\s*([A-Za-z0-9_.:-]+)", re.IGNORECASE),
-        re.compile(r"\[\s*\d+\s*:\s*([^\]\s]+)\s*\]"),
+def _extract_query_and_context(messages: Sequence[Dict[str, str]]) -> Tuple[str, str]:
+    query = ""
+    context = ""
+    for message in messages:
+        if str(message.get("role") or "") != "user":
+            continue
+        content = str(message.get("content") or "")
+        query_marker = "User query:\n"
+        ctx_marker = "Retrieved context:\n```\n"
+        if query_marker in content:
+            query_start = content.find(query_marker) + len(query_marker)
+            query_end = content.find("\n\n", query_start)
+            if query_end < 0:
+                query_end = len(content)
+            query = content[query_start:query_end].strip()
+        if ctx_marker in content:
+            ctx_start = content.find(ctx_marker) + len(ctx_marker)
+            ctx_end = content.find("\n```", ctx_start)
+            if ctx_end < 0:
+                ctx_end = len(content)
+            context = content[ctx_start:ctx_end].strip()
+        break
+    return query, context
+
+
+def _build_extractor_messages(
+    messages: Sequence[Dict[str, str]],
+    *,
+    context_limit: int = 1000,
+) -> List[Dict[str, str]]:
+    query, context = _extract_query_and_context(messages)
+    short_context = _truncate_text(context, context_limit)
+    user_content = (
+        "User query:\n"
+        f"{query}\n\n"
+        "Retrieved context:\n"
+        "```\n"
+        f"{short_context}\n"
+        "```\n\n"
+        "Previous attempt produced internal reasoning but no final answer. "
+        "Produce ONLY the JSON object now.\n"
+        "Output shape:\n"
+        '{"answer":"...","citations":[{"page":1,"stable_id":"..."}]}\n'
+        "No extra keys. No markdown. No prose outside JSON."
     )
-    for pattern in patterns:
-        for match in pattern.finditer(text):
-            stable_id = str(match.group(1) or "").strip().strip(",.;")
-            if stable_id and stable_id not in seen:
-                seen.add(stable_id)
-                ids.append(stable_id)
-    return ids
-
-
-def _select_fallback_citations(
-    thinking_text: str,
-    fallback_citations: Sequence[Dict[str, Any]],
-    max_items: int = 3,
-) -> List[Dict[str, Any]]:
-    cleaned_rows: List[Dict[str, Any]] = []
-    by_id: Dict[str, Dict[str, Any]] = {}
-    for row in fallback_citations:
-        if not isinstance(row, dict):
-            continue
-        stable_id = str(row.get("stable_id") or "").strip()
-        page = row.get("page")
-        if not stable_id or not isinstance(page, int):
-            continue
-        cleaned = {"stable_id": stable_id, "page": page}
-        cleaned_rows.append(cleaned)
-        if stable_id not in by_id:
-            by_id[stable_id] = cleaned
-
-    selected: List[Dict[str, Any]] = []
-    seen: set[str] = set()
-    for stable_id in _extract_stable_ids_from_thinking(thinking_text):
-        row = by_id.get(stable_id)
-        if row is None:
-            continue
-        if row["stable_id"] in seen:
-            continue
-        selected.append(row)
-        seen.add(row["stable_id"])
-        if len(selected) >= max_items:
-            return selected
-
-    for row in cleaned_rows:
-        if row["stable_id"] in seen:
-            continue
-        selected.append(row)
-        seen.add(row["stable_id"])
-        if len(selected) >= max_items:
-            break
-    return selected
-
-
-def _extract_fallback_answer_sentence(thinking_text: str) -> str:
-    text = str(thinking_text or "").strip()
-    if not text:
-        return ""
-    lines = [line.strip(" -\t") for line in text.splitlines() if line.strip()]
-    preferred = [
-        line for line in lines if any(marker in line.lower() for marker in _THINKING_PREFERRED_MARKERS)
+    return [
+        {"role": "system", "content": OLLAMA_RETRY_SYSTEM_PROMPT},
+        {"role": "user", "content": user_content},
     ]
-    candidates = preferred if preferred else lines
-    for candidate in candidates:
-        if len(candidate) >= 24:
-            return _truncate_text(candidate, 300)
-    sentence_chunks = re.split(r"(?<=[.!?])\s+", text)
-    sentence_chunks = [chunk.strip() for chunk in sentence_chunks if chunk and chunk.strip()]
-    if sentence_chunks:
-        return _truncate_text(sentence_chunks[-1], 300)
-    return _truncate_text(text, 300)
 
 
-def _build_answer_from_thinking_fallback(
-    thinking_text: str,
-    fallback_citations: Sequence[Dict[str, Any]],
-) -> str:
-    base = _extract_fallback_answer_sentence(thinking_text)
-    if not base:
-        return ""
-    selected = _select_fallback_citations(thinking_text, fallback_citations)
-    if not selected:
-        return base
-    markers = " ".join(f"[{row['page']}:{row['stable_id']}]" for row in selected)
-    if re.search(r"\[\s*\d+\s*:[^\]]+\]", base):
-        return base
-    return f"{base} {markers}".strip()
+def _response_debug_excerpt(parsed_payload: Dict[str, Any]) -> str:
+    raw = parsed_payload.get("raw")
+    if isinstance(raw, str):
+        text = raw
+    else:
+        text = _compact_json(raw, limit=2000)
+    return _truncate_text(text, 500)
+
+
+def _build_attempt_failure_error(
+    *,
+    attempt_name: str,
+    attempt_index: int,
+    reason: str,
+) -> RuntimeError:
+    return RuntimeError(
+        "Ollama returned invalid assistant JSON content "
+        f"(attempt={attempt_name} index={attempt_index}): {reason}"
+    )
+
+
+def _artifact_prefix_for_attempt_name(attempt_name: str) -> str:
+    if attempt_name == "initial":
+        return "ollama"
+    if attempt_name == "retry_strict_json":
+        return "retry"
+    if attempt_name == "extractor_json_only":
+        return "extract"
+    return attempt_name
+
+
+def write_ollama_attempt_artifacts(
+    *,
+    per_query_dir: Path,
+    query_prefix: str,
+    attempts: Sequence[Dict[str, Any]],
+) -> None:
+    if not attempts:
+        return
+    per_query_dir.mkdir(parents=True, exist_ok=True)
+    for attempt in attempts:
+        if not isinstance(attempt, dict):
+            continue
+        attempt_name = str(attempt.get("attempt_name") or "")
+        prefix = _artifact_prefix_for_attempt_name(attempt_name)
+        request_payload = (
+            attempt.get("request")
+            if isinstance(attempt.get("request"), dict)
+            else {"raw": attempt.get("request")}
+        )
+        response_payload = attempt if isinstance(attempt, dict) else {"raw": attempt}
+        (per_query_dir / f"{query_prefix}_{prefix}_request.json").write_text(
+            json.dumps(request_payload, ensure_ascii=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        (per_query_dir / f"{query_prefix}_{prefix}_response.json").write_text(
+            json.dumps(response_payload, ensure_ascii=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+
+def write_rag_preview_ollama_failure_artifacts(
+    *,
+    attempts: Sequence[Dict[str, Any]],
+) -> Optional[Path]:
+    if not attempts:
+        return None
+    temp_dir = Path(mkdtemp(prefix="bookmind_rag_preview_"))
+    write_ollama_attempt_artifacts(
+        per_query_dir=temp_dir,
+        query_prefix="q01",
+        attempts=attempts,
+    )
+    return temp_dir
 
 
 def generate_answer(
@@ -466,42 +495,55 @@ def generate_answer(
         usage = parsed.get("usage") if isinstance(parsed.get("usage"), dict) else None
         return content.strip(), usage
 
+    del fallback_citations
     if isinstance(provider, OllamaProvider):
         num_ctx = getattr(provider, "ollama_num_ctx", None)
         debug_hook = ollama_debug_hook
-        should_retry = False
 
         attempts = [
             {
                 "name": "initial",
                 "context_limit": None,
-                "max_tokens": int(ollama_num_predict),
+                "num_predict": int(ollama_num_predict),
                 "temperature": float(temperature),
-                "simplify_system_prompt": True,
-                "strict_json": True,
+                "simplify_system_prompt": False,
+                "strict_json": False,
             },
             {
                 "name": "retry_strict_json",
                 "context_limit": 1200,
-                "max_tokens": int(ollama_retry_num_predict),
+                "num_predict": int(ollama_retry_num_predict),
                 "temperature": 0.0,
                 "simplify_system_prompt": True,
                 "strict_json": True,
             },
+            {
+                "name": "extractor_json_only",
+                "context_limit": None,
+                "num_predict": 512,
+                "temperature": 0.0,
+                "simplify_system_prompt": True,
+                "strict_json": False,
+            },
         ]
         last_error: Optional[Exception] = None
         last_failure_fields: Dict[str, Any] = {}
+        saw_thinking_on_retry_empty_content = False
         for attempt_index, attempt in enumerate(attempts):
-            if attempt_index == 1 and not should_retry:
-                continue
-            attempt_messages = _prepare_ollama_retry_messages(
-                messages,
-                context_limit=attempt["context_limit"],
-                simplify_system_prompt=attempt["simplify_system_prompt"],
-                strict_json=attempt["strict_json"],
-            )
+            attempt_messages: List[Dict[str, str]]
+            if attempt["name"] == "extractor_json_only":
+                if not saw_thinking_on_retry_empty_content:
+                    continue
+                attempt_messages = _build_extractor_messages(messages, context_limit=1000)
+            else:
+                attempt_messages = _prepare_ollama_retry_messages(
+                    messages,
+                    context_limit=attempt["context_limit"],
+                    simplify_system_prompt=attempt["simplify_system_prompt"],
+                    strict_json=attempt["strict_json"],
+                )
             options: Dict[str, Any] = {
-                "num_predict": attempt["max_tokens"],
+                "num_predict": attempt["num_predict"],
                 "temperature": attempt["temperature"],
             }
             if isinstance(num_ctx, int) and num_ctx > 0:
@@ -537,14 +579,19 @@ def generate_answer(
                 thinking = str(parsed_payload.get("thinking_text") or "").strip()
                 cleaned = str(content or "").strip()
                 usage = extract_ollama_usage(parsed)
+                prompt_eval_count = usage.get("prompt_eval_count")
+                eval_count = usage.get("eval_count")
                 attempt_debug["response"] = {
                     "raw": parsed_payload.get("raw"),
+                    "raw_head_500": _response_debug_excerpt(parsed_payload),
                     "parsed_keys": parsed_payload.get("parsed_keys"),
                     "content_source": parsed_payload.get("source"),
                     "done_reason": parsed_payload.get("done_reason"),
                     "provider_error": parsed_payload.get("error"),
                     "thinking_len_chars": len(thinking),
                     "answer_len_chars": len(cleaned),
+                    "prompt_eval_count": prompt_eval_count,
+                    "eval_count": eval_count,
                     "usage": usage,
                 }
                 if cleaned:
@@ -554,20 +601,14 @@ def generate_answer(
                         attempt_debug["response"]["json_parse_error"] = str(exc)
                         last_failure_fields = {
                             "done_reason": parsed_payload.get("done_reason"),
-                            "eval_count": usage.get("eval_count"),
-                            "prompt_eval_count": usage.get("prompt_eval_count"),
+                            "eval_count": eval_count,
+                            "prompt_eval_count": prompt_eval_count,
                             "raw_response": parsed_payload.get("raw"),
                         }
-                        if attempt_index == 0:
-                            should_retry = True
-                            last_error = RuntimeError(
-                                "Ollama returned non-parseable JSON in message.content "
-                                f"(attempt={attempt['name']} index={attempt_index})"
-                            )
-                            continue
-                        last_error = RuntimeError(
-                            "Ollama returned non-parseable JSON in message.content "
-                            f"(attempt={attempt['name']} index={attempt_index}): {exc}"
+                        last_error = _build_attempt_failure_error(
+                            attempt_name=str(attempt["name"]),
+                            attempt_index=attempt_index,
+                            reason=str(exc),
                         )
                         continue
                     usage_with_attempt = dict(usage)
@@ -578,35 +619,18 @@ def generate_answer(
                     attempt_debug["response"]["empty_content_with_thinking"] = True
                 last_failure_fields = {
                     "done_reason": parsed_payload.get("done_reason"),
-                    "eval_count": usage.get("eval_count"),
-                    "prompt_eval_count": usage.get("prompt_eval_count"),
+                    "eval_count": eval_count,
+                    "prompt_eval_count": prompt_eval_count,
                     "raw_response": parsed_payload.get("raw"),
                 }
-                if attempt_index == 0:
-                    should_retry = True
-                    last_error = RuntimeError(
-                        "Ollama returned empty message.content "
-                        f"(attempt={attempt['name']} index={attempt_index})"
-                    )
-                    continue
-                last_error = RuntimeError(
-                    "Ollama returned empty message.content after retry "
-                    f"(attempt={attempt['name']} index={attempt_index})"
+                if attempt["name"] == "retry_strict_json" and thinking:
+                    saw_thinking_on_retry_empty_content = True
+                last_error = _build_attempt_failure_error(
+                    attempt_name=str(attempt["name"]),
+                    attempt_index=attempt_index,
+                    reason="empty message.content",
                 )
                 attempt_debug["response"]["empty_answer"] = True
-                if thinking:
-                    fallback_answer = _build_answer_from_thinking_fallback(
-                        thinking,
-                        fallback_citations or [],
-                    )
-                    if fallback_answer:
-                        usage_with_attempt = dict(usage)
-                        usage_with_attempt["attempt_index"] = attempt_index
-                        usage_with_attempt["attempt_name"] = attempt["name"]
-                        usage_with_attempt["fallback_from_thinking"] = True
-                        attempt_debug["response"]["used_thinking_fallback"] = True
-                        attempt_debug["response"]["fallback_answer_len_chars"] = len(fallback_answer)
-                        return fallback_answer, usage_with_attempt
             except Exception as exc:
                 last_error = exc
                 last_failure_fields = {
@@ -617,12 +641,16 @@ def generate_answer(
                 }
                 attempt_debug["response"] = {
                     "raw": parsed,
+                    "raw_head_500": _truncate_text(_compact_json(parsed, limit=2000), 500),
                     "error_type": type(exc).__name__,
                     "error": str(exc),
                 }
             finally:
                 elapsed_ms = int(round((time.perf_counter() - started) * 1000))
                 attempt_debug["timing_ms"] = elapsed_ms
+                attempt_debug["status_code"] = int(
+                    getattr(response, "status_code", attempt_debug.get("http_status", 0)) or 0
+                )
                 if debug_hook is not None:
                     debug_hook(attempt_debug)
         if last_error is not None and last_failure_fields:

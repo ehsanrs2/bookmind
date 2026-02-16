@@ -186,9 +186,23 @@ def test_run_eval_writes_ollama_attempt_artifacts_on_failure(tmp_path: Path, mon
         ollama_debug_hook=None,
     ):
         if ollama_debug_hook is not None:
-            ollama_debug_hook({"request": {"model": "m0"}, "response": {"answer_len_chars": 0}})
-            ollama_debug_hook({"request": {"model": "m1"}, "response": {"answer_len_chars": 0}})
-            ollama_debug_hook({"request": {"model": "m2"}, "response": {"answer_len_chars": 0}})
+            ollama_debug_hook(
+                {"attempt_name": "initial", "request": {"model": "m0"}, "response": {"answer_len_chars": 0}}
+            )
+            ollama_debug_hook(
+                {
+                    "attempt_name": "retry_strict_json",
+                    "request": {"model": "m1"},
+                    "response": {"answer_len_chars": 0},
+                }
+            )
+            ollama_debug_hook(
+                {
+                    "attempt_name": "extractor_json_only",
+                    "request": {"model": "m2"},
+                    "response": {"answer_len_chars": 0},
+                }
+            )
         raise RuntimeError("Ollama generation failed after retries")
 
     monkeypatch.setattr(eval_pack, "search_query", _fake_search_query)
@@ -210,5 +224,5 @@ def test_run_eval_writes_ollama_attempt_artifacts_on_failure(tmp_path: Path, mon
     assert (tmp_path / "per_query" / "q01_ollama_response.json").exists()
     assert (tmp_path / "per_query" / "q01_retry_request.json").exists()
     assert (tmp_path / "per_query" / "q01_retry_response.json").exists()
-    assert (tmp_path / "per_query" / "q01_retry2_request.json").exists()
-    assert (tmp_path / "per_query" / "q01_retry2_response.json").exists()
+    assert (tmp_path / "per_query" / "q01_extract_request.json").exists()
+    assert (tmp_path / "per_query" / "q01_extract_response.json").exists()

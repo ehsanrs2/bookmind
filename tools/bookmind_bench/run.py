@@ -36,6 +36,7 @@ from rag_preview import (
     build_rag_messages,
     format_preview_output,
     generate_answer,
+    write_rag_preview_ollama_failure_artifacts,
 )
 from render_pdf import parse_pages, render_pdf_pages
 
@@ -519,15 +520,27 @@ def _cmd_rag_preview(args: argparse.Namespace) -> int:
         ollama_format=args.ollama_format,
         ollama_num_ctx=args.ollama_num_ctx,
     )
-    answer_text, _usage = generate_answer(
-        provider=provider,
-        messages=messages,
-        max_tokens=args.max_tokens,
-        temperature=args.temperature,
-        ollama_num_predict=args.ollama_num_predict,
-        ollama_retry_num_predict=args.ollama_retry_num_predict,
-        fallback_citations=citations,
-    )
+    ollama_attempts = []
+    debug_hook = ollama_attempts.append if args.backend == "ollama" else None
+    try:
+        answer_text, _usage = generate_answer(
+            provider=provider,
+            messages=messages,
+            max_tokens=args.max_tokens,
+            temperature=args.temperature,
+            ollama_num_predict=args.ollama_num_predict,
+            ollama_retry_num_predict=args.ollama_retry_num_predict,
+            fallback_citations=citations,
+            ollama_debug_hook=debug_hook,
+        )
+    except Exception as exc:
+        if args.backend == "ollama":
+            artifact_dir = write_rag_preview_ollama_failure_artifacts(attempts=ollama_attempts)
+            if artifact_dir is not None:
+                raise RuntimeError(
+                    f"{exc} (debug artifacts: {artifact_dir})"
+                ) from exc
+        raise
     print(
         format_preview_output(
             answer_text=answer_text,
