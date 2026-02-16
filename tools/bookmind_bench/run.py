@@ -504,7 +504,7 @@ def _cmd_rag_preview(args: argparse.Namespace) -> int:
     context_payload = build_context(results, max_chars=args.max_context_chars)
     context_text = str(context_payload.get("context_text") or "")
     citations = context_payload.get("citations") if isinstance(context_payload.get("citations"), list) else []
-    require_json_response = args.backend == "ollama" and args.ollama_format == "json"
+    require_json_response = args.backend == "ollama"
     messages = build_rag_messages(
         args.query,
         context_text,
@@ -524,6 +524,9 @@ def _cmd_rag_preview(args: argparse.Namespace) -> int:
         messages=messages,
         max_tokens=args.max_tokens,
         temperature=args.temperature,
+        ollama_num_predict=args.ollama_num_predict,
+        ollama_retry_num_predict=args.ollama_retry_num_predict,
+        fallback_citations=citations,
     )
     print(
         format_preview_output(
@@ -561,6 +564,8 @@ def _cmd_eval(args: argparse.Namespace) -> int:
     gen_cfg = {
         "max_tokens": args.max_tokens,
         "temperature": args.temperature,
+        "ollama_num_predict": args.ollama_num_predict,
+        "ollama_retry_num_predict": args.ollama_retry_num_predict,
     }
 
     results = run_eval(
@@ -1087,8 +1092,11 @@ def build_parser() -> argparse.ArgumentParser:
     rag_preview.add_argument(
         "--ollama_format",
         choices=["text", "json"],
-        default="json",
-        help="Ollama response format for --backend ollama (default json)",
+        default="text",
+        help=(
+            "Ollama answer mode for --backend ollama (default text). "
+            "'json' still uses JSON-in-text parsing and does not force wire format=json."
+        ),
     )
     rag_preview.add_argument(
         "--ollama_num_ctx",
@@ -1107,6 +1115,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.2,
         help="Sampling temperature (default 0.2)",
+    )
+    rag_preview.add_argument(
+        "--ollama_num_predict",
+        type=int,
+        default=1536,
+        help="Ollama options.num_predict for first attempt (default 1536)",
+    )
+    rag_preview.add_argument(
+        "--ollama_retry_num_predict",
+        type=int,
+        default=2048,
+        help="Ollama options.num_predict for retry attempt (default 2048)",
     )
     rag_preview.add_argument(
         "--show_snippets",
@@ -1198,8 +1218,11 @@ def build_parser() -> argparse.ArgumentParser:
     eval_cmd.add_argument(
         "--ollama_format",
         choices=["text", "json"],
-        default="json",
-        help="Ollama response format for --backend ollama (default json)",
+        default="text",
+        help=(
+            "Ollama answer mode for --backend ollama (default text). "
+            "'json' still uses JSON-in-text parsing and does not force wire format=json."
+        ),
     )
     eval_cmd.add_argument(
         "--ollama_num_ctx",
@@ -1218,6 +1241,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.2,
         help="Sampling temperature (default 0.2)",
+    )
+    eval_cmd.add_argument(
+        "--ollama_num_predict",
+        type=int,
+        default=1536,
+        help="Ollama options.num_predict for first attempt (default 1536)",
+    )
+    eval_cmd.add_argument(
+        "--ollama_retry_num_predict",
+        type=int,
+        default=2048,
+        help="Ollama options.num_predict for retry attempt (default 2048)",
     )
     eval_cmd.add_argument(
         "--timeout_s",

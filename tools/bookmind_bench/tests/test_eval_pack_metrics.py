@@ -175,7 +175,16 @@ def test_run_eval_writes_ollama_attempt_artifacts_on_failure(tmp_path: Path, mon
     class _FakeProvider:
         pass
 
-    def _fake_generate_answer(provider, messages, max_tokens, temperature, ollama_debug_hook=None):
+    def _fake_generate_answer(
+        provider,
+        messages,
+        max_tokens,
+        temperature,
+        ollama_num_predict=1536,
+        ollama_retry_num_predict=2048,
+        fallback_citations=None,
+        ollama_debug_hook=None,
+    ):
         if ollama_debug_hook is not None:
             ollama_debug_hook({"request": {"model": "m0"}, "response": {"answer_len_chars": 0}})
             ollama_debug_hook({"request": {"model": "m1"}, "response": {"answer_len_chars": 0}})

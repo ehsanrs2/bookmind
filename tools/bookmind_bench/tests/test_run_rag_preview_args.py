@@ -11,8 +11,10 @@ def test_rag_preview_args_defaults() -> None:
     assert args.backend == "ollama"
     assert args.ollama_url == "http://127.0.0.1:11434"
     assert args.ollama_model == "qwen3-vl:latest"
-    assert args.ollama_format == "json"
+    assert args.ollama_format == "text"
     assert args.ollama_num_ctx is None
+    assert args.ollama_num_predict == 1536
+    assert args.ollama_retry_num_predict == 2048
     assert args.max_tokens == 512
     assert args.temperature == 0.2
     assert args.show_snippets is False
@@ -35,20 +37,24 @@ def test_cmd_rag_preview_routes_calls(tmp_path, monkeypatch) -> None:
         ]
 
     class _FakeProvider:
-        def chat(self, messages, max_tokens, temperature):
-            captured["chat"] = {
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-            }
-            return "answer", {"total_tokens": 1}
+        pass
 
     def _fake_build_provider(**kwargs):
         captured["provider"] = kwargs
         return _FakeProvider()
 
+    def _fake_generate_answer(**kwargs):
+        captured["generate_answer"] = kwargs
+        return "answer", {"total_tokens": 1}
+
+    def _fake_format_preview_output(answer_text, citations, show_snippets):
+        assert answer_text == "answer"
+        return "ok\n"
+
     monkeypatch.setattr(run, "search_query", _fake_search_query)
     monkeypatch.setattr(run, "build_vlm_provider", _fake_build_provider)
+    monkeypatch.setattr(run, "generate_answer", _fake_generate_answer)
+    monkeypatch.setattr(run, "format_preview_output", _fake_format_preview_output)
 
     parser = run.build_parser()
     args = parser.parse_args(
@@ -62,6 +68,10 @@ def test_cmd_rag_preview_routes_calls(tmp_path, monkeypatch) -> None:
             "123",
             "--temperature",
             "0.4",
+            "--ollama_num_predict",
+            "1666",
+            "--ollama_retry_num_predict",
+            "2444",
         ]
     )
 
@@ -69,5 +79,7 @@ def test_cmd_rag_preview_routes_calls(tmp_path, monkeypatch) -> None:
     assert exit_code == 0
     assert captured["search"]["content_types"] == ["text", "table"]
     assert captured["provider"]["backend"] == "ollama"
-    assert captured["chat"]["max_tokens"] == 123
-    assert captured["chat"]["temperature"] == 0.4
+    assert captured["generate_answer"]["max_tokens"] == 123
+    assert captured["generate_answer"]["temperature"] == 0.4
+    assert captured["generate_answer"]["ollama_num_predict"] == 1666
+    assert captured["generate_answer"]["ollama_retry_num_predict"] == 2444

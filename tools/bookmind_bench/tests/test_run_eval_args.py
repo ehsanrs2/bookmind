@@ -14,8 +14,10 @@ def test_eval_args_defaults() -> None:
     assert args.max_context_chars == 6000
     assert args.heuristic_boost_figures is True
     assert args.backend == "ollama"
-    assert args.ollama_format == "json"
+    assert args.ollama_format == "text"
     assert args.ollama_num_ctx is None
+    assert args.ollama_num_predict == 1536
+    assert args.ollama_retry_num_predict == 2048
     assert args.max_tokens == 512
     assert args.temperature == 0.2
 
@@ -52,6 +54,10 @@ def test_cmd_eval_parses_content_types_and_bool(tmp_path: Path, monkeypatch) -> 
             "false",
             "--backend",
             "vllm",
+            "--ollama_num_predict",
+            "1777",
+            "--ollama_retry_num_predict",
+            "2555",
         ]
     )
     exit_code = args.func(args)
@@ -60,3 +66,5 @@ def test_cmd_eval_parses_content_types_and_bool(tmp_path: Path, monkeypatch) -> 
     assert captured["retrieval_cfg"]["content_types"] == ["text", "figure_caption"]
     assert captured["retrieval_cfg"]["heuristic_boost_figures"] is False
     assert captured["backend_cfg"]["backend"] == "vllm"
+    assert captured["gen_cfg"]["ollama_num_predict"] == 1777
+    assert captured["gen_cfg"]["ollama_retry_num_predict"] == 2555

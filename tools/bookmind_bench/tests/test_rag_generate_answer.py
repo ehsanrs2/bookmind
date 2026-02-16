@@ -67,7 +67,7 @@ def test_generate_answer_ollama(monkeypatch) -> None:
 
         def json(self):
             return {
-                "message": {"content": "ollama rag answer"},
+                "message": {"content": '{"answer":"ollama rag answer","citations":[]}'},
                 "prompt_eval_count": 11,
                 "eval_count": 12,
             }
@@ -103,7 +103,7 @@ def test_generate_answer_ollama_response_fallback(monkeypatch) -> None:
 
         def json(self):
             return {
-                "response": "ollama fallback answer",
+                "response": '{"answer":"ollama fallback answer","citations":[]}',
                 "prompt_eval_count": 7,
                 "eval_count": 9,
             }
@@ -149,7 +149,7 @@ def test_generate_answer_ollama_json_content_extracts_answer(monkeypatch) -> Non
 
     def _fake_post(url, json=None, timeout=60):
         assert json is not None
-        assert json["format"] == "json"
+        assert "format" not in json
         return _FakeResponse()
 
     monkeypatch.setattr(requests, "post", _fake_post)
@@ -198,8 +198,8 @@ def test_generate_answer_ollama_malformed_json_raises(monkeypatch) -> None:
         )
         raise AssertionError("Expected RuntimeError for malformed Ollama JSON content")
     except RuntimeError as exc:
-        assert "malformed JSON content" in str(exc)
-    assert len(attempts) == 1
+        assert "failed after retry" in str(exc)
+    assert len(attempts) == 2
     assert attempts[0]["http_status"] == 200
     assert attempts[0]["response_headers"]["content-type"] == "application/json"
 
@@ -259,10 +259,65 @@ def test_generate_answer_ollama_retries_on_empty_then_succeeds(monkeypatch) -> N
     assert calls["count"] == 2
     assert len(attempts) == 2
     assert attempts[0]["response"]["empty_content_with_thinking"] is True
-    assert attempts[1]["request"]["format"] == "json"
+    assert attempts[0]["request"]["options"]["num_predict"] == 1536
+    assert "format" not in attempts[0]["request"]
+    assert attempts[1]["request"]["options"]["num_predict"] == 2048
+    assert attempts[1]["request"]["options"]["temperature"] == 0.0
 
 
-def test_generate_answer_ollama_retries_exhausted_raises(monkeypatch) -> None:
+def test_generate_answer_ollama_uses_custom_num_predict_values(monkeypatch) -> None:
+    class _FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+            self.status_code = 200
+            self.headers = {"Content-Type": "application/json"}
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return self._payload
+
+    payloads = [
+        {
+            "message": {"content": "", "thinking": "answer should be short"},
+            "eval_count": 256,
+            "done_reason": "length",
+        },
+        {
+            "message": {"content": '{"answer":"ok","citations":[]}'},
+            "eval_count": 42,
+        },
+    ]
+    calls = {"count": 0}
+
+    def _fake_post(url, json=None, timeout=60):
+        idx = calls["count"]
+        calls["count"] += 1
+        return _FakeResponse(payloads[idx])
+
+    monkeypatch.setattr(requests, "post", _fake_post)
+    attempts = []
+    provider = OllamaProvider(
+        ollama_url="http://127.0.0.1:11434",
+        model="qwen3-vl:latest",
+        ollama_format="text",
+    )
+    text, usage = generate_answer(
+        provider=provider,
+        messages=[{"role": "system", "content": "s"}, {"role": "user", "content": "Q"}],
+        ollama_num_predict=999,
+        ollama_retry_num_predict=1337,
+        ollama_debug_hook=attempts.append,
+    )
+    assert text == "ok"
+    assert usage is not None
+    assert calls["count"] == 2
+    assert attempts[0]["request"]["options"]["num_predict"] == 999
+    assert attempts[1]["request"]["options"]["num_predict"] == 1337
+
+
+def test_generate_answer_ollama_retries_exhausted_uses_thinking_fallback(monkeypatch) -> None:
     class _FakeResponse:
         def __init__(self):
             self.status_code = 200
@@ -272,7 +327,53 @@ def test_generate_answer_ollama_retries_exhausted_raises(monkeypatch) -> None:
             return None
 
         def json(self):
-            return {"message": {"content": " \n\t", "thinking": "still thinking"}, "eval_count": 512}
+            return {
+                "message": {"content": " \n\t", "thinking": "still thinking"},
+                "eval_count": 512,
+                "prompt_eval_count": 33,
+                "done_reason": "length",
+            }
+
+    calls = {"count": 0}
+
+    def _fake_post(url, json=None, timeout=60):
+        calls["count"] += 1
+        return _FakeResponse()
+
+    monkeypatch.setattr(requests, "post", _fake_post)
+    provider = OllamaProvider(
+        ollama_url="http://127.0.0.1:11434",
+        model="qwen3-vl:latest",
+        ollama_format="json",
+    )
+    text, usage = generate_answer(
+        provider=provider,
+        messages=[{"role": "system", "content": "s"}, {"role": "user", "content": "Q"}],
+        fallback_citations=[{"page": 3, "stable_id": "sid-3"}],
+    )
+    assert "still thinking" in text
+    assert "[3:sid-3]" in text
+    assert usage is not None
+    assert usage.get("fallback_from_thinking") is True
+    assert calls["count"] == 2
+
+
+def test_generate_answer_ollama_retries_exhausted_raises_without_thinking(monkeypatch) -> None:
+    class _FakeResponse:
+        def __init__(self):
+            self.status_code = 200
+            self.headers = {"Content-Type": "application/json"}
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {
+                "message": {"content": " \n\t", "thinking": ""},
+                "eval_count": 512,
+                "prompt_eval_count": 33,
+                "done_reason": "length",
+            }
 
     calls = {"count": 0}
 
@@ -294,6 +395,9 @@ def test_generate_answer_ollama_retries_exhausted_raises(monkeypatch) -> None:
         raise AssertionError("Expected RuntimeError after exhausted Ollama retries")
     except RuntimeError as exc:
         assert "failed after retry" in str(exc)
+        assert "done_reason=length" in str(exc)
+        assert "eval_count=512" in str(exc)
+        assert "prompt_eval_count=33" in str(exc)
     assert calls["count"] == 2
 
 
@@ -327,5 +431,44 @@ def test_generate_answer_ollama_error_payload_retries_then_raises(monkeypatch) -
         raise AssertionError("Expected RuntimeError for ollama error payload")
     except RuntimeError as exc:
         assert "failed after retry" in str(exc)
-    assert len(attempts) == 1
+    assert len(attempts) == 2
     assert attempts[0]["response"]["provider_error"] == "model overloaded"
+
+
+def test_generate_answer_ollama_extracts_json_with_leading_trailing_junk(monkeypatch) -> None:
+    class _FakeResponse:
+        def __init__(self):
+            self.status_code = 200
+            self.headers = {"Content-Type": "application/json"}
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {
+                "message": {
+                    "content": (
+                        "preface ignored\n"
+                        '{"answer":"final answer","citations":[{"page":2,"stable_id":"s2"}]}'
+                        "\ntrailer ignored"
+                    )
+                },
+                "prompt_eval_count": 5,
+                "eval_count": 6,
+            }
+
+    def _fake_post(url, json=None, timeout=60):
+        return _FakeResponse()
+
+    monkeypatch.setattr(requests, "post", _fake_post)
+
+    provider = OllamaProvider(
+        ollama_url="http://127.0.0.1:11434",
+        model="qwen3-vl:latest",
+        ollama_format="text",
+    )
+    text, usage = generate_answer(provider=provider, messages=[{"role": "user", "content": "Q"}])
+
+    assert text == "final answer"
+    assert usage is not None
+    assert usage["attempt_index"] == 0

@@ -185,7 +185,7 @@ def run_eval(
         model=str(backend_cfg.get("model") or "qwen3-vl"),
         ollama_url=str(backend_cfg.get("ollama_url") or "http://127.0.0.1:11434"),
         ollama_model=str(backend_cfg.get("ollama_model") or "qwen3-vl:latest"),
-        ollama_format=str(backend_cfg.get("ollama_format") or "json"),
+        ollama_format=str(backend_cfg.get("ollama_format") or "text"),
         ollama_num_ctx=backend_cfg.get("ollama_num_ctx"),
     )
 
@@ -244,6 +244,9 @@ def run_eval(
                 messages=messages,
                 max_tokens=int(gen_cfg.get("max_tokens", 512)),
                 temperature=float(gen_cfg.get("temperature", 0.2)),
+                ollama_num_predict=int(gen_cfg.get("ollama_num_predict", 1536)),
+                ollama_retry_num_predict=int(gen_cfg.get("ollama_retry_num_predict", 2048)),
+                fallback_citations=citations,
                 ollama_debug_hook=hook,
             )
         except Exception as exc:
