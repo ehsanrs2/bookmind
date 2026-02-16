@@ -36,6 +36,8 @@ def test_vlm_args_parse_backend_and_ollama_defaults():
     assert args.backend == "ollama"
     assert args.ollama_url == "http://127.0.0.1:11434"
     assert args.ollama_model == "qwen3-vl:latest"
+    assert args.ollama_format == "text"
+    assert args.ollama_num_ctx is None
 
 
 def test_cmd_vlm_routes_backend_to_engine(tmp_path, monkeypatch):
@@ -76,6 +78,8 @@ def test_cmd_vlm_routes_backend_to_engine(tmp_path, monkeypatch):
     assert captured["backend"] == "ollama"
     assert captured["ollama_url"] == "http://127.0.0.1:11434"
     assert captured["ollama_model"] == "qwen3-vl:latest"
+    assert captured["ollama_format"] == "text"
+    assert captured["ollama_num_ctx"] is None
 
 
 def test_cmd_vlm_layout_routes_backend_to_engine(tmp_path, monkeypatch):

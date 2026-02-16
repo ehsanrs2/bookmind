@@ -107,6 +107,7 @@ def parse_ollama_chat_payload(payload: Any) -> Dict[str, Any]:
     source: Optional[str] = None
     done_reason: Optional[str] = None
     error_text: Optional[str] = None
+    thinking_text: Optional[str] = None
 
     if isinstance(payload, dict):
         parsed_keys = sorted(str(key) for key in payload.keys())
@@ -123,6 +124,9 @@ def parse_ollama_chat_payload(payload: Any) -> Dict[str, Any]:
             if isinstance(message_content, str):
                 answer_text = message_content
                 source = "message.content"
+            message_thinking = message.get("thinking")
+            if isinstance(message_thinking, str):
+                thinking_text = message_thinking
 
         if answer_text is None:
             response_text = payload.get("response")
@@ -141,6 +145,7 @@ def parse_ollama_chat_payload(payload: Any) -> Dict[str, Any]:
             "source": source,
             "done_reason": done_reason,
             "error": error_text,
+            "thinking_text": thinking_text,
             "parsed_keys": parsed_keys,
             "raw": payload,
         }
@@ -169,6 +174,7 @@ def parse_ollama_chat_payload(payload: Any) -> Dict[str, Any]:
         "source": None,
         "done_reason": None,
         "error": None,
+        "thinking_text": None,
         "parsed_keys": [],
         "raw": payload,
     }
@@ -238,10 +244,19 @@ class OpenAICompatProvider(VLMProvider):
 
 
 class OllamaProvider(VLMProvider):
-    def __init__(self, ollama_url: str, model: str, timeout_s: int = 60) -> None:
+    def __init__(
+        self,
+        ollama_url: str,
+        model: str,
+        timeout_s: int = 60,
+        ollama_format: str = "text",
+        ollama_num_ctx: Optional[int] = None,
+    ) -> None:
         self.ollama_url = ollama_url.rstrip("/")
         self.model = model
         self.timeout_s = timeout_s
+        self.ollama_format = ollama_format.strip().lower() if ollama_format else "text"
+        self.ollama_num_ctx = ollama_num_ctx
 
     def caption(
         self,
@@ -251,16 +266,21 @@ class OllamaProvider(VLMProvider):
         temperature: float,
     ) -> Tuple[str, Optional[Dict[str, Any]]]:
         image_b64 = _encode_image_base64(Path(image_path))
-        payload = {
+        options: Dict[str, Any] = {
+            "num_predict": max_tokens,
+            "temperature": temperature,
+        }
+        if isinstance(self.ollama_num_ctx, int) and self.ollama_num_ctx > 0:
+            options["num_ctx"] = int(self.ollama_num_ctx)
+
+        payload: Dict[str, Any] = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt, "images": [image_b64]}],
             "stream": False,
-            "options": {
-                "num_predict": max_tokens,
-                "temperature": temperature,
-                "num_ctx": 4096,
-            },
+            "options": options,
         }
+        if self.ollama_format == "json":
+            payload["format"] = "json"
         start = time.perf_counter()
         response = requests.post(
             self.ollama_url + "/api/chat",
@@ -293,10 +313,18 @@ def build_vlm_provider(
     ollama_url: str,
     ollama_model: str,
     timeout_s: int = 60,
+    ollama_format: str = "text",
+    ollama_num_ctx: Optional[int] = None,
 ) -> VLMProvider:
     backend_norm = backend.strip().lower()
     if backend_norm == "ollama":
-        return OllamaProvider(ollama_url=ollama_url, model=ollama_model, timeout_s=timeout_s)
+        return OllamaProvider(
+            ollama_url=ollama_url,
+            model=ollama_model,
+            timeout_s=timeout_s,
+            ollama_format=ollama_format,
+            ollama_num_ctx=ollama_num_ctx,
+        )
     if backend_norm == "vllm":
         return OpenAICompatProvider(endpoint=endpoint, model=model, timeout_s=timeout_s)
     raise ValueError(f"Unsupported VLM backend: {backend}")

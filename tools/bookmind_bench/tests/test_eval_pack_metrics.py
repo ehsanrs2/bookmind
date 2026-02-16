@@ -199,7 +199,7 @@ def test_run_eval_writes_ollama_attempt_artifacts_on_failure(tmp_path: Path, mon
     assert results["queries"][0]["status"] == "failed"
     assert (tmp_path / "per_query" / "q01_ollama_request.json").exists()
     assert (tmp_path / "per_query" / "q01_ollama_response.json").exists()
-    assert (tmp_path / "per_query" / "q01_attempt1_request.json").exists()
-    assert (tmp_path / "per_query" / "q01_attempt1_response.json").exists()
-    assert (tmp_path / "per_query" / "q01_attempt2_request.json").exists()
-    assert (tmp_path / "per_query" / "q01_attempt2_response.json").exists()
+    assert (tmp_path / "per_query" / "q01_retry_request.json").exists()
+    assert (tmp_path / "per_query" / "q01_retry_response.json").exists()
+    assert (tmp_path / "per_query" / "q01_retry2_request.json").exists()
+    assert (tmp_path / "per_query" / "q01_retry2_response.json").exists()

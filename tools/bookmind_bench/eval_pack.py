@@ -70,14 +70,15 @@ def _write_ollama_attempt_artifacts(
     for idx, attempt in enumerate(attempts[1:], start=1):
         if not isinstance(attempt, dict):
             continue
+        suffix = "retry" if idx == 1 else f"retry{idx}"
         _write_json(
-            per_query_dir / f"{query_prefix}_attempt{idx}_request.json",
+            per_query_dir / f"{query_prefix}_{suffix}_request.json",
             attempt.get("request")
             if isinstance(attempt.get("request"), dict)
             else {"raw": attempt.get("request")},
         )
         _write_json(
-            per_query_dir / f"{query_prefix}_attempt{idx}_response.json",
+            per_query_dir / f"{query_prefix}_{suffix}_response.json",
             attempt,
         )
 
@@ -184,6 +185,8 @@ def run_eval(
         model=str(backend_cfg.get("model") or "qwen3-vl"),
         ollama_url=str(backend_cfg.get("ollama_url") or "http://127.0.0.1:11434"),
         ollama_model=str(backend_cfg.get("ollama_model") or "qwen3-vl:latest"),
+        ollama_format=str(backend_cfg.get("ollama_format") or "json"),
+        ollama_num_ctx=backend_cfg.get("ollama_num_ctx"),
     )
 
     rows: List[Dict[str, Any]] = []
@@ -224,7 +227,11 @@ def run_eval(
         citations = context_payload.get("citations")
         if not isinstance(citations, list):
             citations = []
-        messages = build_rag_messages(query_text, context_text)
+        messages = build_rag_messages(
+            query_text,
+            context_text,
+            require_json_response=backend_name == "ollama",
+        )
 
         t2 = time.perf_counter()
         usage: Optional[Dict[str, Any]]

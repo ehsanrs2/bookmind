@@ -11,6 +11,8 @@ def test_rag_preview_args_defaults() -> None:
     assert args.backend == "ollama"
     assert args.ollama_url == "http://127.0.0.1:11434"
     assert args.ollama_model == "qwen3-vl:latest"
+    assert args.ollama_format == "json"
+    assert args.ollama_num_ctx is None
     assert args.max_tokens == 512
     assert args.temperature == 0.2
     assert args.show_snippets is False

@@ -14,6 +14,8 @@ def test_eval_args_defaults() -> None:
     assert args.max_context_chars == 6000
     assert args.heuristic_boost_figures is True
     assert args.backend == "ollama"
+    assert args.ollama_format == "json"
+    assert args.ollama_num_ctx is None
     assert args.max_tokens == 512
     assert args.temperature == 0.2
 

@@ -22,7 +22,10 @@ DEFAULT_SYSTEM_PROMPT = (
     "provided document context."
 )
 OLLAMA_RETRY_SYSTEM_PROMPT = (
-    "Answer only from retrieved context. If context is insufficient, say so plainly."
+    "Answer only from retrieved context. Keep it concise. If context is insufficient, "
+    "explicitly say context is insufficient. Return JSON only in this exact shape: "
+    '{"answer":"...","citations":[{"page":1,"stable_id":"..."}]}. '
+    "Do not include markdown or extra keys."
 )
 
 
@@ -108,7 +111,34 @@ def build_context(results: Sequence[Dict[str, Any]], max_chars: int = 6000) -> D
     }
 
 
-def build_rag_messages(query: str, context_text: str) -> List[Dict[str, str]]:
+def _rag_user_instructions_json() -> str:
+    return (
+        "Instructions:\n"
+        "- Answer using only the provided context.\n"
+        "- If the context is insufficient, explicitly say context is insufficient.\n"
+        "- Return ONLY valid JSON in this exact shape:\n"
+        '{"answer":"...","citations":[{"page":1,"stable_id":"..."}]}\n'
+        "- Keep answer concise.\n"
+        "- Do not use markdown code fences.\n"
+        "- citations may be an empty list."
+    )
+
+
+def _rag_user_instructions_text() -> str:
+    return (
+        "Instructions:\n"
+        "- Answer using only the provided context.\n"
+        "- If the context is insufficient, explicitly say the context is insufficient.\n"
+        "- Include citations in the form [page:stable_id]."
+    )
+
+
+def build_rag_messages(
+    query: str,
+    context_text: str,
+    *,
+    require_json_response: bool = False,
+) -> List[Dict[str, str]]:
     user_content = (
         "User query:\n"
         f"{query.strip()}\n\n"
@@ -116,10 +146,7 @@ def build_rag_messages(query: str, context_text: str) -> List[Dict[str, str]]:
         "```\n"
         f"{context_text.strip()}\n"
         "```\n\n"
-        "Instructions:\n"
-        "- Answer using only the provided context.\n"
-        "- If the context is insufficient, explicitly say the context is insufficient.\n"
-        "- Include citations in the form [page:stable_id]."
+        f"{_rag_user_instructions_json() if require_json_response else _rag_user_instructions_text()}"
     )
     return [
         {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
@@ -150,6 +177,7 @@ def _prepare_ollama_retry_messages(
     *,
     context_limit: Optional[int] = None,
     simplify_system_prompt: bool = False,
+    strict_json: bool = False,
 ) -> List[Dict[str, str]]:
     prepared: List[Dict[str, str]] = [copy.deepcopy(dict(msg)) for msg in messages]
     if simplify_system_prompt:
@@ -165,6 +193,19 @@ def _prepare_ollama_retry_messages(
                     msg["content"] = _truncate_rag_user_context(
                         user_content, max_context_chars=context_limit
                     )
+                break
+    if strict_json:
+        for msg in prepared:
+            if str(msg.get("role") or "") == "user":
+                content = str(msg.get("content") or "").rstrip()
+                strict_tail = (
+                    "\n\nSTRICT OUTPUT RULES:\n"
+                    "- Return exactly one JSON object.\n"
+                    "- Object shape must be "
+                    '{"answer":"...","citations":[{"page":1,"stable_id":"..."}]}.\n'
+                    "- No markdown, no commentary, no chain-of-thought."
+                )
+                msg["content"] = content + strict_tail
                 break
     return prepared
 
@@ -200,6 +241,28 @@ def _decode_ollama_response(response: requests.Response) -> Any:
         raw_text = response.text
         parsed = parse_ollama_chat_payload(raw_text)
         return parsed.get("raw")
+
+
+def _extract_json_answer(content_text: str) -> str:
+    raw = str(content_text or "").strip()
+    if not raw:
+        raise ValueError("Ollama returned empty message.content")
+    try:
+        parsed = json.loads(raw)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError("Ollama JSON mode response is not valid JSON in message.content") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("Ollama JSON mode response must be a JSON object")
+    answer_value = parsed.get("answer")
+    if not isinstance(answer_value, str):
+        raise ValueError("Ollama JSON mode response missing string field 'answer'")
+    cleaned = answer_value.strip()
+    if not cleaned:
+        raise ValueError("Ollama JSON mode response contains empty 'answer'")
+    citations = parsed.get("citations")
+    if citations is not None and not isinstance(citations, list):
+        raise ValueError("Ollama JSON mode response field 'citations' must be a list when present")
+    return cleaned
 
 
 def generate_answer(
@@ -243,6 +306,12 @@ def generate_answer(
         return content.strip(), usage
 
     if isinstance(provider, OllamaProvider):
+        using_json_format = str(getattr(provider, "ollama_format", "text")).strip().lower() == "json"
+        num_ctx = getattr(provider, "ollama_num_ctx", None)
+        debug_hook = ollama_debug_hook
+        retry_due_to_empty_content_with_thinking = False
+        fatal_error = False
+
         attempts = [
             {
                 "name": "initial",
@@ -250,40 +319,41 @@ def generate_answer(
                 "max_tokens": int(max_tokens),
                 "temperature": float(temperature),
                 "simplify_system_prompt": False,
+                "strict_json": False,
             },
             {
-                "name": "retry_context_reduced",
-                "context_limit": 2500,
-                "max_tokens": int(max_tokens),
-                "temperature": float(temperature),
-                "simplify_system_prompt": False,
-            },
-            {
-                "name": "retry_safe_prompt",
+                "name": "retry_strict_json",
                 "context_limit": 2500,
                 "max_tokens": min(int(max_tokens), 256),
                 "temperature": 0.0,
                 "simplify_system_prompt": True,
+                "strict_json": True,
             },
         ]
         last_error: Optional[Exception] = None
         for attempt_index, attempt in enumerate(attempts):
+            if attempt_index == 1 and not retry_due_to_empty_content_with_thinking:
+                continue
             attempt_messages = _prepare_ollama_retry_messages(
                 messages,
                 context_limit=attempt["context_limit"],
                 simplify_system_prompt=attempt["simplify_system_prompt"],
+                strict_json=attempt["strict_json"],
             )
-            options = {
+            options: Dict[str, Any] = {
                 "num_predict": attempt["max_tokens"],
                 "temperature": attempt["temperature"],
-                "num_ctx": 4096,
             }
-            payload = {
+            if isinstance(num_ctx, int) and num_ctx > 0:
+                options["num_ctx"] = int(num_ctx)
+            payload: Dict[str, Any] = {
                 "model": provider.model,
                 "messages": attempt_messages,
                 "stream": False,
                 "options": options,
             }
+            if using_json_format:
+                payload["format"] = "json"
             attempt_debug: Dict[str, Any] = {
                 "attempt_index": attempt_index,
                 "attempt_name": attempt["name"],
@@ -298,12 +368,15 @@ def generate_answer(
                     json=payload,
                     timeout=provider.timeout_s,
                 )
-                attempt_debug["http_status"] = int(response.status_code)
-                attempt_debug["response_headers"] = _ollama_header_subset(response.headers)
+                attempt_debug["http_status"] = int(getattr(response, "status_code", 200))
+                attempt_debug["response_headers"] = _ollama_header_subset(
+                    getattr(response, "headers", {})
+                )
                 response.raise_for_status()
                 parsed = _decode_ollama_response(response)
                 parsed_payload = parse_ollama_chat_payload(parsed)
                 content = parsed_payload.get("answer_text")
+                thinking = str(parsed_payload.get("thinking_text") or "").strip()
                 cleaned = str(content or "").strip()
                 usage = extract_ollama_usage(parsed)
                 attempt_debug["response"] = {
@@ -312,16 +385,30 @@ def generate_answer(
                     "content_source": parsed_payload.get("source"),
                     "done_reason": parsed_payload.get("done_reason"),
                     "provider_error": parsed_payload.get("error"),
+                    "thinking_len_chars": len(thinking),
                     "answer_len_chars": len(cleaned),
                     "usage": usage,
                 }
                 if cleaned:
+                    if using_json_format:
+                        try:
+                            cleaned = _extract_json_answer(cleaned)
+                        except Exception as exc:  # noqa: BLE001
+                            fatal_error = True
+                            raise RuntimeError(
+                                "Ollama returned malformed JSON content in message.content "
+                                f"(attempt={attempt['name']} index={attempt_index})"
+                            ) from exc
                     usage_with_attempt = dict(usage)
                     usage_with_attempt["attempt_index"] = attempt_index
                     usage_with_attempt["attempt_name"] = attempt["name"]
                     return cleaned, usage_with_attempt
+                if attempt_index == 0 and thinking:
+                    attempt_debug["response"]["empty_content_with_thinking"] = True
+                    retry_due_to_empty_content_with_thinking = True
+                    continue
                 last_error = RuntimeError(
-                    "Ollama returned empty/whitespace answer "
+                    "Ollama returned empty message.content after retry "
                     f"(attempt={attempt['name']} index={attempt_index})"
                 )
                 attempt_debug["response"]["empty_answer"] = True
@@ -335,10 +422,14 @@ def generate_answer(
             finally:
                 elapsed_ms = int(round((time.perf_counter() - started) * 1000))
                 attempt_debug["timing_ms"] = elapsed_ms
-                if ollama_debug_hook is not None:
-                    ollama_debug_hook(attempt_debug)
+                if debug_hook is not None:
+                    debug_hook(attempt_debug)
+            if fatal_error:
+                break
+        if fatal_error and last_error is not None:
+            raise RuntimeError(str(last_error)) from last_error
         raise RuntimeError(
-            "Ollama generation failed after retries; see saved attempt request/response artifacts."
+            "Ollama generation failed after retry; see saved request/response artifacts."
         ) from last_error
 
     raise TypeError(f"Unsupported provider type for RAG preview: {type(provider)!r}")

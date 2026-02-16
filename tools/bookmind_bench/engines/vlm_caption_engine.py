@@ -311,6 +311,8 @@ def run_vlm_layout(
     backend: str = DEFAULT_BACKEND,
     ollama_url: str = DEFAULT_OLLAMA_URL,
     ollama_model: str = DEFAULT_OLLAMA_MODEL,
+    ollama_format: str = "text",
+    ollama_num_ctx: Optional[int] = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     temperature: float = DEFAULT_TEMPERATURE,
     ocr_hint_max_chars: int = DEFAULT_OCR_MAX_CHARS,
@@ -334,6 +336,8 @@ def run_vlm_layout(
         model=model,
         ollama_url=ollama_url,
         ollama_model=ollama_model,
+        ollama_format=ollama_format,
+        ollama_num_ctx=ollama_num_ctx,
     )
     model_name = ollama_model if backend == "ollama" else model
 
@@ -461,6 +465,8 @@ def run_vlm_caption_jobs(
     backend: str = DEFAULT_BACKEND,
     ollama_url: str = DEFAULT_OLLAMA_URL,
     ollama_model: str = DEFAULT_OLLAMA_MODEL,
+    ollama_format: str = "text",
+    ollama_num_ctx: Optional[int] = None,
     paddleocr_jsonl: Optional[str] = None,
     use_ocr_hints: bool = True,
     max_tokens: int = DEFAULT_MAX_TOKENS,
@@ -482,6 +488,8 @@ def run_vlm_caption_jobs(
         model=model,
         ollama_url=ollama_url,
         ollama_model=ollama_model,
+        ollama_format=ollama_format,
+        ollama_num_ctx=ollama_num_ctx,
     )
     model_name = ollama_model if backend == "ollama" else model
 

@@ -288,6 +288,8 @@ def _cmd_vlm(args: argparse.Namespace) -> int:
         model=args.model,
         ollama_url=args.ollama_url,
         ollama_model=args.ollama_model,
+        ollama_format=args.ollama_format,
+        ollama_num_ctx=args.ollama_num_ctx,
         paddleocr_jsonl=str(paddleocr_path) if paddleocr_path else None,
         use_ocr_hints=args.use_ocr_hints,
         max_tokens=args.max_tokens,
@@ -334,6 +336,8 @@ def _cmd_vlm_layout(args: argparse.Namespace) -> int:
         model=args.model,
         ollama_url=args.ollama_url,
         ollama_model=args.ollama_model,
+        ollama_format=args.ollama_format,
+        ollama_num_ctx=args.ollama_num_ctx,
         max_tokens=args.max_tokens,
         temperature=args.temperature,
         ocr_hint_max_chars=args.ocr_hint_max_chars,
@@ -500,13 +504,20 @@ def _cmd_rag_preview(args: argparse.Namespace) -> int:
     context_payload = build_context(results, max_chars=args.max_context_chars)
     context_text = str(context_payload.get("context_text") or "")
     citations = context_payload.get("citations") if isinstance(context_payload.get("citations"), list) else []
-    messages = build_rag_messages(args.query, context_text)
+    require_json_response = args.backend == "ollama" and args.ollama_format == "json"
+    messages = build_rag_messages(
+        args.query,
+        context_text,
+        require_json_response=require_json_response,
+    )
     provider = build_vlm_provider(
         backend=args.backend,
         endpoint=args.endpoint,
         model=args.model,
         ollama_url=args.ollama_url,
         ollama_model=args.ollama_model,
+        ollama_format=args.ollama_format,
+        ollama_num_ctx=args.ollama_num_ctx,
     )
     answer_text, _usage = generate_answer(
         provider=provider,
@@ -536,6 +547,8 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         "model": args.model,
         "ollama_url": args.ollama_url,
         "ollama_model": args.ollama_model,
+        "ollama_format": args.ollama_format,
+        "ollama_num_ctx": args.ollama_num_ctx,
     }
     retrieval_cfg = {
         "top_k": args.top_k,
@@ -742,6 +755,18 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Ollama model tag for --backend ollama (default {DEFAULT_OLLAMA_MODEL})",
     )
     vlm.add_argument(
+        "--ollama_format",
+        choices=["text", "json"],
+        default="text",
+        help="Ollama response format for --backend ollama (default text)",
+    )
+    vlm.add_argument(
+        "--ollama_num_ctx",
+        type=int,
+        required=False,
+        help="Optional Ollama options.num_ctx override",
+    )
+    vlm.add_argument(
         "--paddleocr_jsonl",
         required=False,
         help="Optional PaddleOCR JSONL for OCR hints",
@@ -802,6 +827,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--ollama_model",
         default=DEFAULT_OLLAMA_MODEL,
         help=f"Ollama model tag for --backend ollama (default {DEFAULT_OLLAMA_MODEL})",
+    )
+    vlm_layout.add_argument(
+        "--ollama_format",
+        choices=["text", "json"],
+        default="text",
+        help="Ollama response format for --backend ollama (default text)",
+    )
+    vlm_layout.add_argument(
+        "--ollama_num_ctx",
+        type=int,
+        required=False,
+        help="Optional Ollama options.num_ctx override",
     )
     vlm_layout.add_argument(
         "--max_tokens",
@@ -1048,6 +1085,18 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Ollama model for --backend ollama (default {DEFAULT_OLLAMA_MODEL})",
     )
     rag_preview.add_argument(
+        "--ollama_format",
+        choices=["text", "json"],
+        default="json",
+        help="Ollama response format for --backend ollama (default json)",
+    )
+    rag_preview.add_argument(
+        "--ollama_num_ctx",
+        type=int,
+        required=False,
+        help="Optional Ollama options.num_ctx override",
+    )
+    rag_preview.add_argument(
         "--max_tokens",
         type=int,
         default=512,
@@ -1145,6 +1194,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--ollama_model",
         default=DEFAULT_OLLAMA_MODEL,
         help=f"Ollama model for --backend ollama (default {DEFAULT_OLLAMA_MODEL})",
+    )
+    eval_cmd.add_argument(
+        "--ollama_format",
+        choices=["text", "json"],
+        default="json",
+        help="Ollama response format for --backend ollama (default json)",
+    )
+    eval_cmd.add_argument(
+        "--ollama_num_ctx",
+        type=int,
+        required=False,
+        help="Optional Ollama options.num_ctx override",
     )
     eval_cmd.add_argument(
         "--max_tokens",
