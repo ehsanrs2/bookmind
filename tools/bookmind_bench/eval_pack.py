@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from statistics import median
 from typing import Any, Dict, List, Optional, Sequence
@@ -26,6 +27,51 @@ FIGURE_BOOST_TOKENS = (
     "circuit",
     "wiring",
 )
+
+
+@dataclass
+class _ProgressReporter:
+    enabled: bool
+    total: int
+    tqdm_bar: Any = None
+    index: int = 0
+
+    def phase(self, query_id: str, phase: str) -> None:
+        if not self.enabled:
+            return
+        qid = str(query_id or "")
+        phase_name = str(phase or "").strip()
+        if self.tqdm_bar is not None:
+            self.tqdm_bar.set_description_str(f"{self.index + 1}/{self.total} {qid}")
+            self.tqdm_bar.set_postfix_str(phase_name)
+            return
+        print(f"[{self.index + 1}/{self.total}] {qid}: {phase_name}...")
+
+    def next_query(self) -> None:
+        if not self.enabled:
+            return
+        self.index += 1
+        if self.tqdm_bar is not None:
+            self.tqdm_bar.update(1)
+
+    def close(self) -> None:
+        if self.tqdm_bar is not None:
+            self.tqdm_bar.close()
+
+
+def _build_progress_reporter(total: int, enabled: bool) -> _ProgressReporter:
+    if not enabled:
+        return _ProgressReporter(enabled=False, total=total)
+    try:
+        from tqdm import tqdm  # type: ignore
+
+        return _ProgressReporter(
+            enabled=True,
+            total=total,
+            tqdm_bar=tqdm(total=max(0, int(total)), unit="query", dynamic_ncols=True),
+        )
+    except Exception:
+        return _ProgressReporter(enabled=True, total=total)
 
 
 def _write_json(path: Path, payload: Dict[str, Any]) -> None:
@@ -138,6 +184,7 @@ def run_eval(
     retrieval_cfg: Dict[str, Any],
     gen_cfg: Dict[str, Any],
     output_dir: str | Path,
+    progress: bool = False,
 ) -> Dict[str, Any]:
     out_dir = Path(output_dir)
     items_dir = out_dir / "items"
@@ -169,171 +216,184 @@ def run_eval(
     hit_pages_values: List[int] = []
     failed_queries = 0
     backend_name = str(backend_cfg.get("backend") or "").strip().lower()
+    progress_reporter = _build_progress_reporter(len(queries), enabled=bool(progress))
 
-    for index, query_item in enumerate(queries, start=1):
-        query_id = str(query_item.get("id") or f"q{index}")
-        query_text = str(query_item.get("query") or "")
-        expected_pages = query_item.get("expected_pages")
-        per_query_prefix = f"q{index:02d}"
+    try:
+        for index, query_item in enumerate(queries, start=1):
+            query_id = str(query_item.get("id") or f"q{index}")
+            query_text = str(query_item.get("query") or "")
+            expected_pages = query_item.get("expected_pages")
+            per_query_prefix = f"q{index:02d}"
 
-        t0 = time.perf_counter()
-        retrieved = search_query(
-            query=query_text,
-            qdrant_url=qdrant_url,
-            collection=collection,
-            embed_model=str(retrieval_cfg.get("embed_model") or "all-MiniLM-L6-v2"),
-            top_k=top_k,
-            timeout_s=int(retrieval_cfg.get("timeout_s", 30)),
-            content_types=cleaned_types if cleaned_types else None,
-        )
-        t1 = time.perf_counter()
-
-        retrieved = reorder_results_for_query(
-            query=query_text,
-            results=retrieved,
-            heuristic_boost_figures=heuristic_boost_figures,
-        )
-
-        context_payload = build_context(retrieved, max_chars=max_context_chars)
-        context_text = str(context_payload.get("context_text") or "")
-        citations = context_payload.get("citations")
-        if not isinstance(citations, list):
-            citations = []
-        messages = build_rag_messages(
-            query_text,
-            context_text,
-            require_json_response=backend_name == "ollama",
-        )
-
-        t2 = time.perf_counter()
-        usage: Optional[Dict[str, Any]]
-        generation_error: Optional[Exception] = None
-        ollama_attempts: List[Dict[str, Any]] = []
-        hook = ollama_attempts.append if backend_name == "ollama" else None
-        try:
-            raw_answer_text, usage = generate_answer(
-                provider=provider,
-                messages=messages,
-                max_tokens=int(gen_cfg.get("max_tokens", 512)),
-                temperature=float(gen_cfg.get("temperature", 0.2)),
-                ollama_num_predict=int(gen_cfg.get("ollama_num_predict", 1536)),
-                ollama_retry_num_predict=int(gen_cfg.get("ollama_retry_num_predict", 2048)),
-                fallback_citations=citations,
-                ollama_debug_hook=hook,
+            progress_reporter.phase(query_id, "retrieve")
+            t0 = time.perf_counter()
+            retrieved = search_query(
+                query=query_text,
+                qdrant_url=qdrant_url,
+                collection=collection,
+                embed_model=str(retrieval_cfg.get("embed_model") or "all-MiniLM-L6-v2"),
+                top_k=top_k,
+                timeout_s=int(retrieval_cfg.get("timeout_s", 30)),
+                content_types=cleaned_types if cleaned_types else None,
+                embed_cache_dir=retrieval_cfg.get("embed_cache_dir"),
+                embed_local_only=bool(retrieval_cfg.get("embed_local_only", False)),
+                hf_timeout_s=int(retrieval_cfg.get("hf_timeout_s", 30)),
+                hf_retries=int(retrieval_cfg.get("hf_retries", 3)),
             )
-        except Exception as exc:
-            raw_answer_text = ""
-            usage = None
-            generation_error = exc
+            t1 = time.perf_counter()
 
-        answer_text = str(raw_answer_text or "").strip()
-        if generation_error is not None:
-            _write_provider_debug(
-                per_query_dir=per_query_dir,
-                query_prefix=per_query_prefix,
-                query_id=query_id,
-                issue="generation_exception",
-                usage=usage,
-                error=generation_error,
+            retrieved = reorder_results_for_query(
+                query=query_text,
+                results=retrieved,
+                heuristic_boost_figures=heuristic_boost_figures,
             )
-        elif not answer_text:
-            _write_provider_debug(
-                per_query_dir=per_query_dir,
-                query_prefix=per_query_prefix,
-                query_id=query_id,
-                issue="empty_answer",
-                usage=usage,
-                error=None,
+
+            progress_reporter.phase(query_id, "build_context")
+            context_payload = build_context(retrieved, max_chars=max_context_chars)
+            context_text = str(context_payload.get("context_text") or "")
+            citations = context_payload.get("citations")
+            if not isinstance(citations, list):
+                citations = []
+            messages = build_rag_messages(
+                query_text,
+                context_text,
+                require_json_response=backend_name == "ollama",
             )
-        if backend_name == "ollama" and (generation_error is not None or not answer_text):
-            write_ollama_attempt_artifacts(
-                per_query_dir=per_query_dir,
-                query_prefix=per_query_prefix,
-                attempts=ollama_attempts,
-            )
-        t3 = time.perf_counter()
 
-        retrieval_ms = (t1 - t0) * 1000.0
-        generation_ms = (t3 - t2) * 1000.0
-        total_ms = (t3 - t0) * 1000.0
+            progress_reporter.phase(query_id, "generate")
+            t2 = time.perf_counter()
+            usage: Optional[Dict[str, Any]]
+            generation_error: Optional[Exception] = None
+            ollama_attempts: List[Dict[str, Any]] = []
+            hook = ollama_attempts.append if backend_name == "ollama" else None
+            try:
+                raw_answer_text, usage = generate_answer(
+                    provider=provider,
+                    messages=messages,
+                    max_tokens=int(gen_cfg.get("max_tokens", 512)),
+                    temperature=float(gen_cfg.get("temperature", 0.2)),
+                    ollama_num_predict=int(gen_cfg.get("ollama_num_predict", 1536)),
+                    ollama_retry_num_predict=int(gen_cfg.get("ollama_retry_num_predict", 2048)),
+                    fallback_citations=citations,
+                    ollama_debug_hook=hook,
+                )
+            except Exception as exc:
+                raw_answer_text = ""
+                usage = None
+                generation_error = exc
 
-        citation_rows: List[Dict[str, Any]] = []
-        citation_pages: List[int] = []
-        for citation in citations:
-            if not isinstance(citation, dict):
-                continue
-            page_value = citation.get("page")
-            stable_id = str(citation.get("stable_id") or "")
-            entry = {
-                "page": page_value if isinstance(page_value, int) else None,
-                "stable_id": stable_id,
-                "content_type": citation.get("content_type"),
-            }
-            citation_rows.append(entry)
-            if isinstance(page_value, int):
-                citation_pages.append(page_value)
+            answer_text = str(raw_answer_text or "").strip()
+            progress_reporter.phase(query_id, "write_artifacts")
+            if generation_error is not None:
+                _write_provider_debug(
+                    per_query_dir=per_query_dir,
+                    query_prefix=per_query_prefix,
+                    query_id=query_id,
+                    issue="generation_exception",
+                    usage=usage,
+                    error=generation_error,
+                )
+            elif not answer_text:
+                _write_provider_debug(
+                    per_query_dir=per_query_dir,
+                    query_prefix=per_query_prefix,
+                    query_id=query_id,
+                    issue="empty_answer",
+                    usage=usage,
+                    error=None,
+                )
+            if backend_name == "ollama" and (generation_error is not None or not answer_text):
+                write_ollama_attempt_artifacts(
+                    per_query_dir=per_query_dir,
+                    query_prefix=per_query_prefix,
+                    attempts=ollama_attempts,
+                )
+            t3 = time.perf_counter()
 
-        retrieved_ids = [str(row.get("stable_id") or row.get("id") or "") for row in retrieved]
-        answer_len_chars = len(answer_text)
-        citation_count = len(citation_rows)
-        citation_rate = _citation_rate(answer_text)
-        status = "ok"
-        failure_reason: Optional[str] = None
-        if generation_error is not None:
-            status = "failed"
-            failure_reason = str(generation_error)
-            failed_queries += 1
-        elif not answer_text:
-            status = "failed"
-            failure_reason = "Empty answer from provider"
-            failed_queries += 1
+            retrieval_ms = (t1 - t0) * 1000.0
+            generation_ms = (t3 - t2) * 1000.0
+            total_ms = (t3 - t0) * 1000.0
 
-        if citation_count > 0:
-            any_citation_count += 1
-        if isinstance(expected_pages, list) and expected_pages:
-            expected_page_set = {int(page) for page in expected_pages if isinstance(page, int)}
-            hit_pages_values.append(1 if expected_page_set.intersection(citation_pages) else 0)
+            citation_rows: List[Dict[str, Any]] = []
+            citation_pages: List[int] = []
+            for citation in citations:
+                if not isinstance(citation, dict):
+                    continue
+                page_value = citation.get("page")
+                stable_id = str(citation.get("stable_id") or "")
+                entry = {
+                    "page": page_value if isinstance(page_value, int) else None,
+                    "stable_id": stable_id,
+                    "content_type": citation.get("content_type"),
+                }
+                citation_rows.append(entry)
+                if isinstance(page_value, int):
+                    citation_pages.append(page_value)
 
-        row = {
-            "id": query_id,
-            "query": query_text,
-            "notes": query_item.get("notes"),
-            "expected_pages": expected_pages,
-            "timings": {
-                "retrieval_ms": round(retrieval_ms, 3),
-                "generation_ms": round(generation_ms, 3),
-                "total_ms": round(total_ms, 3),
-            },
-            "answer_text": answer_text,
-            "answer": answer_text,
-            "answer_len_chars": answer_len_chars,
-            "citation_rate": round(citation_rate, 4),
-            "citation_count": citation_count,
-            "citations": citation_rows,
-            "retrieved_ids": retrieved_ids,
-            "usage": usage,
-            "status": status,
-            "failure_reason": failure_reason,
-        }
-        rows.append(row)
-        _write_json(items_dir / f"{query_id}.json", row)
-        (per_query_dir / f"{per_query_prefix}_answer.txt").write_text(
-            answer_text + "\n",
-            encoding="utf-8",
-        )
-        _write_json(
-            per_query_dir / f"{per_query_prefix}_citations.json",
-            {
+            retrieved_ids = [str(row.get("stable_id") or row.get("id") or "") for row in retrieved]
+            answer_len_chars = len(answer_text)
+            citation_count = len(citation_rows)
+            citation_rate = _citation_rate(answer_text)
+            status = "ok"
+            failure_reason: Optional[str] = None
+            if generation_error is not None:
+                status = "failed"
+                failure_reason = str(generation_error)
+                failed_queries += 1
+            elif not answer_text:
+                status = "failed"
+                failure_reason = "Empty answer from provider"
+                failed_queries += 1
+
+            if citation_count > 0:
+                any_citation_count += 1
+            if isinstance(expected_pages, list) and expected_pages:
+                expected_page_set = {int(page) for page in expected_pages if isinstance(page, int)}
+                hit_pages_values.append(1 if expected_page_set.intersection(citation_pages) else 0)
+
+            row = {
                 "id": query_id,
                 "query": query_text,
+                "notes": query_item.get("notes"),
+                "expected_pages": expected_pages,
+                "timings": {
+                    "retrieval_ms": round(retrieval_ms, 3),
+                    "generation_ms": round(generation_ms, 3),
+                    "total_ms": round(total_ms, 3),
+                },
+                "answer_text": answer_text,
+                "answer": answer_text,
+                "answer_len_chars": answer_len_chars,
+                "citation_rate": round(citation_rate, 4),
+                "citation_count": citation_count,
                 "citations": citation_rows,
                 "retrieved_ids": retrieved_ids,
-            },
-        )
+                "usage": usage,
+                "status": status,
+                "failure_reason": failure_reason,
+            }
+            rows.append(row)
+            _write_json(items_dir / f"{query_id}.json", row)
+            (per_query_dir / f"{per_query_prefix}_answer.txt").write_text(
+                answer_text + "\n",
+                encoding="utf-8",
+            )
+            _write_json(
+                per_query_dir / f"{per_query_prefix}_citations.json",
+                {
+                    "id": query_id,
+                    "query": query_text,
+                    "citations": citation_rows,
+                    "retrieved_ids": retrieved_ids,
+                },
+            )
 
-        total_values.append(total_ms)
-        answer_len_values.append(answer_len_chars)
-        citation_count_values.append(citation_count)
+            total_values.append(total_ms)
+            answer_len_values.append(answer_len_chars)
+            citation_count_values.append(citation_count)
+            progress_reporter.next_query()
+    finally:
+        progress_reporter.close()
 
     count_queries = len(rows)
     summary: Dict[str, Any] = {

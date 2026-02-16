@@ -85,7 +85,9 @@ def test_qdrant_payload_and_point_id(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(qdrant_ingest, "_load_embedding_model", lambda *_: _FakeEmbedModel())
+    monkeypatch.setattr(
+        qdrant_ingest, "_load_embedding_model", lambda *_, **__: _FakeEmbedModel()
+    )
 
     qdrant_module = types.ModuleType("qdrant_client")
     qdrant_module.QdrantClient = _FakeQdrantClient

@@ -89,7 +89,10 @@ python tools/bookmind_bench/run.py bundle --out <RUN_DIR>
 python tools/bookmind_bench/run.py qdrant-ingest --run <RUN_DIR> \
   --qdrant_url http://127.0.0.1:6333 \
   --collection bookmind_bench \
-  --id_mode uint64
+  --id_mode uint64 \
+  --embed_cache_dir /path/to/hf-cache \
+  --hf_timeout_s 30 \
+  --hf_retries 3
 ```
 
 Search:
@@ -127,6 +130,9 @@ python tools/bookmind_bench/run.py rag-preview \
   --query "Summarize the calibration setup" \
   --qdrant_url http://127.0.0.1:6333 \
   --collection bookmind_bench \
+  --embed_cache_dir /path/to/hf-cache \
+  --hf_timeout_s 30 \
+  --hf_retries 3 \
   --backend ollama \
   --ollama_url http://127.0.0.1:11434 \
   --ollama_model qwen3-vl:latest
@@ -168,6 +174,9 @@ python tools/bookmind_bench/run.py eval \
   --out /tmp/bookmind_layout_run/eval_ollama \
   --qdrant_url http://127.0.0.1:6333 \
   --collection bookmind_bench \
+  --embed_cache_dir /path/to/hf-cache \
+  --hf_timeout_s 30 \
+  --hf_retries 3 \
   --backend ollama \
   --ollama_url http://127.0.0.1:11434 \
   --ollama_model qwen3-vl:latest \
@@ -199,8 +208,10 @@ Output artifacts:
   (`generation_exception` / `empty_answer`)
 - `eval/per_query/qNN_ollama_request.json` + `qNN_ollama_response.json`:
   first Ollama attempt request/response debug (on empty/failure)
-- `eval/per_query/qNN_attempt1_*.json`, `qNN_attempt2_*.json`:
-  retry request/response debug snapshots (on empty/failure)
+- `eval/per_query/qNN_retry_request.json` + `qNN_retry_response.json`:
+  strict retry request/response debug snapshots (on empty/failure)
+- `eval/per_query/qNN_extract_request.json` + `qNN_extract_response.json`:
+  extractor request/response debug snapshots (on empty/failure)
 
 Ollama empty-answer retry behavior:
 - Initial request uses configured generation settings.
@@ -225,6 +236,22 @@ Offline flags and model lookup:
 - default local embedding path:
   `tools/bookmind_bench/offline_bundle/models/embeddings/all-MiniLM-L6-v2`
 - override with `--embed_model /path/to/local/model` when needed.
+- force local-only embedding load with `--embed_local_only true` (fails fast if
+  the model is not already cached).
+
+Embedding prefetch helper (online machine):
+```bash
+./tools/bookmind_bench/scripts/prefetch_embed_model.sh sentence-transformers/all-MiniLM-L6-v2 /path/to/hf-cache
+```
+
+Then run eval offline using the same cache:
+```bash
+python tools/bookmind_bench/run.py eval \
+  --queries tools/bookmind_bench/samples/queries_scanned_tech.json \
+  --out /tmp/bookmind_layout_run/eval_ollama \
+  --embed_cache_dir /path/to/hf-cache \
+  --embed_local_only true
+```
 
 ## Offline verification
 ```bash

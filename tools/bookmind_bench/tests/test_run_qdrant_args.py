@@ -8,6 +8,10 @@ def test_qdrant_ingest_args_defaults():
     assert args.qdrant_url == "http://127.0.0.1:6333"
     assert args.collection == "bookmind_bench"
     assert args.embed_model == "all-MiniLM-L6-v2"
+    assert args.embed_cache_dir is None
+    assert args.embed_local_only is False
+    assert args.hf_timeout_s == 30
+    assert args.hf_retries == 3
     assert args.recreate is False
     assert args.batch_size == 64
     assert args.timeout_s == 60
@@ -36,6 +40,10 @@ def test_qdrant_search_content_types_parse(monkeypatch):
     exit_code = args.func(args)
     assert exit_code == 0
     assert captured["content_types"] == ["text", "table"]
+    assert captured["embed_cache_dir"] is None
+    assert captured["embed_local_only"] is False
+    assert captured["hf_timeout_s"] == 30
+    assert captured["hf_retries"] == 3
 
 
 def test_qdrant_ingest_auto_bundle_when_bundle_missing(tmp_path, monkeypatch):
@@ -72,10 +80,28 @@ def test_qdrant_ingest_auto_bundle_when_bundle_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(run, "ingest_bundle", _fake_ingest_bundle)
 
     parser = run.build_parser()
-    args = parser.parse_args(["qdrant-ingest", "--run", str(run_dir)])
+    args = parser.parse_args(
+        [
+            "qdrant-ingest",
+            "--run",
+            str(run_dir),
+            "--embed_cache_dir",
+            "/tmp/embed-cache",
+            "--embed_local_only",
+            "true",
+            "--hf_timeout_s",
+            "44",
+            "--hf_retries",
+            "5",
+        ]
+    )
     exit_code = args.func(args)
 
     assert exit_code == 0
     assert captured["bundle_run"]["run_dir"] == str(run_dir)
     assert captured["bundle_run"]["include_images"] is False
     assert captured["ingest_bundle"]["bundle_dir"] == str(run_dir / "bundle")
+    assert captured["ingest_bundle"]["embed_cache_dir"] == "/tmp/embed-cache"
+    assert captured["ingest_bundle"]["embed_local_only"] is True
+    assert captured["ingest_bundle"]["hf_timeout_s"] == 44
+    assert captured["ingest_bundle"]["hf_retries"] == 5

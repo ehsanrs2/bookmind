@@ -432,6 +432,10 @@ def _cmd_qdrant_ingest(args: argparse.Namespace) -> int:
         batch_size=args.batch_size,
         timeout_s=args.timeout_s,
         id_mode=args.id_mode,
+        embed_cache_dir=args.embed_cache_dir,
+        embed_local_only=args.embed_local_only,
+        hf_timeout_s=args.hf_timeout_s,
+        hf_retries=args.hf_retries,
     )
     collection_state = "existing"
     if stats.get("collection_recreated"):
@@ -461,6 +465,10 @@ def _cmd_qdrant_search(args: argparse.Namespace) -> int:
         top_k=args.top_k,
         timeout_s=args.timeout_s,
         content_types=content_types if content_types else None,
+        embed_cache_dir=args.embed_cache_dir,
+        embed_local_only=args.embed_local_only,
+        hf_timeout_s=args.hf_timeout_s,
+        hf_retries=args.hf_retries,
     )
 
     if not results:
@@ -500,6 +508,10 @@ def _cmd_rag_preview(args: argparse.Namespace) -> int:
         top_k=args.top_k,
         timeout_s=args.timeout_s,
         content_types=content_types if content_types else None,
+        embed_cache_dir=args.embed_cache_dir,
+        embed_local_only=args.embed_local_only,
+        hf_timeout_s=args.hf_timeout_s,
+        hf_retries=args.hf_retries,
     )
 
     context_payload = build_context(results, max_chars=args.max_context_chars)
@@ -572,6 +584,10 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         "max_context_chars": args.max_context_chars,
         "heuristic_boost_figures": args.heuristic_boost_figures,
         "embed_model": args.embed_model,
+        "embed_cache_dir": args.embed_cache_dir,
+        "embed_local_only": args.embed_local_only,
+        "hf_timeout_s": args.hf_timeout_s,
+        "hf_retries": args.hf_retries,
         "timeout_s": args.timeout_s,
     }
     gen_cfg = {
@@ -589,6 +605,7 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         retrieval_cfg=retrieval_cfg,
         gen_cfg=gen_cfg,
         output_dir=out_dir,
+        progress=args.progress,
     )
     write_reports(results, out_dir)
 
@@ -969,6 +986,29 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     qdrant_ingest.add_argument(
+        "--embed_cache_dir",
+        required=False,
+        help="Optional embedding cache directory for sentence-transformers",
+    )
+    qdrant_ingest.add_argument(
+        "--embed_local_only",
+        default=False,
+        type=_parse_bool,
+        help="Load embedding model from local cache/files only (default false)",
+    )
+    qdrant_ingest.add_argument(
+        "--hf_timeout_s",
+        type=int,
+        default=30,
+        help="HuggingFace hub timeout seconds for embedding model load (default 30)",
+    )
+    qdrant_ingest.add_argument(
+        "--hf_retries",
+        type=int,
+        default=3,
+        help="HuggingFace retries for embedding model load (default 3)",
+    )
+    qdrant_ingest.add_argument(
         "--recreate",
         default=False,
         type=_parse_bool,
@@ -1018,6 +1058,29 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     qdrant_search.add_argument(
+        "--embed_cache_dir",
+        required=False,
+        help="Optional embedding cache directory for sentence-transformers",
+    )
+    qdrant_search.add_argument(
+        "--embed_local_only",
+        default=False,
+        type=_parse_bool,
+        help="Load embedding model from local cache/files only (default false)",
+    )
+    qdrant_search.add_argument(
+        "--hf_timeout_s",
+        type=int,
+        default=30,
+        help="HuggingFace hub timeout seconds for embedding model load (default 30)",
+    )
+    qdrant_search.add_argument(
+        "--hf_retries",
+        type=int,
+        default=3,
+        help="HuggingFace retries for embedding model load (default 3)",
+    )
+    qdrant_search.add_argument(
         "--top_k",
         type=int,
         default=10,
@@ -1058,6 +1121,29 @@ def build_parser() -> argparse.ArgumentParser:
             "Embedding model id or local path (default all-MiniLM-L6-v2 alias for "
             "sentence-transformers/all-MiniLM-L6-v2)"
         ),
+    )
+    rag_preview.add_argument(
+        "--embed_cache_dir",
+        required=False,
+        help="Optional embedding cache directory for sentence-transformers",
+    )
+    rag_preview.add_argument(
+        "--embed_local_only",
+        default=False,
+        type=_parse_bool,
+        help="Load embedding model from local cache/files only (default false)",
+    )
+    rag_preview.add_argument(
+        "--hf_timeout_s",
+        type=int,
+        default=30,
+        help="HuggingFace hub timeout seconds for embedding model load (default 30)",
+    )
+    rag_preview.add_argument(
+        "--hf_retries",
+        type=int,
+        default=3,
+        help="HuggingFace retries for embedding model load (default 3)",
     )
     rag_preview.add_argument(
         "--top_k",
@@ -1180,6 +1266,29 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     eval_cmd.add_argument(
+        "--embed_cache_dir",
+        required=False,
+        help="Optional embedding cache directory for sentence-transformers",
+    )
+    eval_cmd.add_argument(
+        "--embed_local_only",
+        default=False,
+        type=_parse_bool,
+        help="Load embedding model from local cache/files only (default false)",
+    )
+    eval_cmd.add_argument(
+        "--hf_timeout_s",
+        type=int,
+        default=30,
+        help="HuggingFace hub timeout seconds for embedding model load (default 30)",
+    )
+    eval_cmd.add_argument(
+        "--hf_retries",
+        type=int,
+        default=3,
+        help="HuggingFace retries for embedding model load (default 3)",
+    )
+    eval_cmd.add_argument(
         "--top_k",
         type=int,
         default=8,
@@ -1272,6 +1381,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=30,
         help="Qdrant HTTP timeout in seconds (default 30)",
+    )
+    eval_cmd.add_argument(
+        "--progress",
+        default=True,
+        type=_parse_bool,
+        help="Show per-query eval progress (default true)",
     )
     eval_cmd.set_defaults(func=_cmd_eval)
 

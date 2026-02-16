@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
@@ -63,7 +64,21 @@ def _resolve_model_ref(embed_model: str) -> str:
     return canonical
 
 
-def _load_embedding_model(embed_model: str):
+def _is_timeout_error(exc: Exception) -> bool:
+    message = str(exc or "").lower()
+    if "timeout" in message or "readtimeout" in message:
+        return True
+    return isinstance(exc, TimeoutError)
+
+
+def _load_embedding_model(
+    embed_model: str,
+    *,
+    embed_cache_dir: Optional[str] = None,
+    embed_local_only: bool = False,
+    hf_timeout_s: int = 30,
+    hf_retries: int = 3,
+):
     resolved = _resolve_model_ref(embed_model)
     try:
         from sentence_transformers import SentenceTransformer
@@ -72,16 +87,49 @@ def _load_embedding_model(embed_model: str):
             "sentence-transformers is required for embedding. Install the qdrant profile requirements."
         ) from exc
 
-    try:
-        return SentenceTransformer(resolved)
-    except Exception as exc:
-        if _is_offline_enabled():
+    timeout_value = max(1, int(hf_timeout_s))
+    retries = max(1, int(hf_retries))
+    cache_folder = str(embed_cache_dir).strip() if embed_cache_dir else None
+    init_kwargs: Dict[str, Any] = {}
+    if cache_folder:
+        init_kwargs["cache_folder"] = cache_folder
+
+    if embed_local_only:
+        init_kwargs["local_files_only"] = True
+        try:
+            return SentenceTransformer(resolved, **init_kwargs)
+        except Exception as exc:
             raise RuntimeError(
-                f"Failed to load embedding model in offline mode from '{resolved}'. "
-                "Ensure model files are present under offline_bundle/models/embeddings/"
-                " or pass --embed_model with a local model path."
+                "Failed to load embedding model with --embed_local_only=true from "
+                f"'{resolved}'. Prefetch the model to local cache first or set --embed_model "
+                "to a local path."
             ) from exc
-        raise
+
+    os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = str(timeout_value)
+    os.environ["HF_HUB_ETAG_TIMEOUT"] = str(timeout_value)
+
+    last_error: Optional[Exception] = None
+    for attempt in range(1, retries + 1):
+        try:
+            return SentenceTransformer(resolved, **init_kwargs)
+        except Exception as exc:
+            last_error = exc
+            if _is_offline_enabled():
+                raise RuntimeError(
+                    f"Failed to load embedding model in offline mode from '{resolved}'. "
+                    "Ensure model files are present under offline_bundle/models/embeddings/"
+                    " or pass --embed_model with a local model path."
+                ) from exc
+            if attempt < retries and _is_timeout_error(exc):
+                time.sleep(min(2 ** (attempt - 1), 4))
+                continue
+            break
+
+    raise RuntimeError(
+        "Failed to load embedding model after retries. "
+        f"model='{resolved}' retries={retries} timeout_s={timeout_value}. "
+        "Try --embed_local_only true after prefetching the model."
+    ) from last_error
 
 
 def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
@@ -213,6 +261,10 @@ def ingest_bundle(
     batch_size: int = 64,
     timeout_s: int = 60,
     id_mode: str = "uint64",
+    embed_cache_dir: Optional[str] = None,
+    embed_local_only: bool = False,
+    hf_timeout_s: int = 30,
+    hf_retries: int = 3,
 ) -> Dict[str, Any]:
     """Ingest normalized bundle records into Qdrant."""
     bundle_path = Path(bundle_dir)
@@ -255,7 +307,13 @@ def ingest_bundle(
             "collection_created": False,
         }
 
-    model = _load_embedding_model(embed_model)
+    model = _load_embedding_model(
+        embed_model,
+        embed_cache_dir=embed_cache_dir,
+        embed_local_only=embed_local_only,
+        hf_timeout_s=hf_timeout_s,
+        hf_retries=hf_retries,
+    )
     vectors = embed_texts(model, [str(r.get("text") or "") for r in records], batch_size=batch_size)
     if not vectors:
         raise RuntimeError("No embeddings were produced from bundle records.")
@@ -321,6 +379,10 @@ def search_query(
     top_k: int = 10,
     timeout_s: int = 30,
     content_types: Optional[Sequence[str]] = None,
+    embed_cache_dir: Optional[str] = None,
+    embed_local_only: bool = False,
+    hf_timeout_s: int = 30,
+    hf_retries: int = 3,
 ) -> List[Dict[str, Any]]:
     """Search a Qdrant collection using an embedded text query."""
     try:
@@ -331,7 +393,13 @@ def search_query(
             "qdrant-client is required. Install the qdrant profile requirements."
         ) from exc
 
-    model = _load_embedding_model(embed_model)
+    model = _load_embedding_model(
+        embed_model,
+        embed_cache_dir=embed_cache_dir,
+        embed_local_only=embed_local_only,
+        hf_timeout_s=hf_timeout_s,
+        hf_retries=hf_retries,
+    )
     vector = embed_texts(model, [query], batch_size=1)[0]
     client = QdrantClient(url=qdrant_url, timeout=timeout_s)
 
