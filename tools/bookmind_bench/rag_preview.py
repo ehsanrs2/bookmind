@@ -520,15 +520,18 @@ def generate_answer(
                 "simplify_system_prompt": True,
                 "strict_json": True,
             },
-            {
-                "name": "extractor_json_only",
-                "context_limit": None,
-                "num_predict": 512,
-                "temperature": 0.0,
-                "simplify_system_prompt": True,
-                "strict_json": False,
-            },
         ]
+        if think_value is not False:
+            attempts.append(
+                {
+                    "name": "extractor_json_only",
+                    "context_limit": None,
+                    "num_predict": 512,
+                    "temperature": 0.0,
+                    "simplify_system_prompt": True,
+                    "strict_json": False,
+                }
+            )
         last_error: Optional[Exception] = None
         last_failure_fields: Dict[str, Any] = {}
         saw_empty_content_on_retry = False

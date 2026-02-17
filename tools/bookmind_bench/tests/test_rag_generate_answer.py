@@ -416,6 +416,7 @@ def test_generate_answer_ollama_extractor_recovers_when_retry_empty_with_thinkin
     text, usage = generate_answer(
         provider=provider,
         messages=[{"role": "system", "content": "s"}, {"role": "user", "content": "Q"}],
+        ollama_think=True,
         ollama_debug_hook=attempts.append,
     )
     assert text == "final recovered answer"
@@ -425,9 +426,9 @@ def test_generate_answer_ollama_extractor_recovers_when_retry_empty_with_thinkin
     assert usage["attempt_name"] == "extractor_json_only"
     assert calls["count"] == 3
     assert len(attempts) == 3
-    assert attempts[0]["request"]["think"] is False
-    assert attempts[1]["request"]["think"] is False
-    assert attempts[2]["request"]["think"] is False
+    assert attempts[0]["request"]["think"] is True
+    assert attempts[1]["request"]["think"] is True
+    assert attempts[2]["request"]["think"] is True
     assert attempts[0]["request"]["options"]["num_predict"] == 1536
     assert attempts[1]["request"]["options"]["num_predict"] == 2048
     assert attempts[2]["request"]["options"]["num_predict"] == 512
@@ -475,7 +476,7 @@ def test_generate_answer_ollama_retries_exhausted_raises_without_thinking(monkey
         assert "eval_count=512" in str(exc)
         assert "prompt_eval_count=33" in str(exc)
         assert "raw_head_500=" in str(exc)
-    assert calls["count"] == 3
+    assert calls["count"] == 2
 
 
 def test_generate_answer_ollama_error_payload_retries_then_raises(monkeypatch) -> None:

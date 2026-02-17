@@ -158,6 +158,8 @@ Notes:
 - Use `--show_snippets true` to print retrieved snippet previews in the output.
 - For Ollama RAG/eval, default is `--ollama_think false` to prevent empty content;
   enable thinking only for debugging.
+- With `--ollama_think false`, RAG/eval avoids the extractor fallback stage and
+  raises with debug artifacts if Ollama still returns empty `message.content`.
 
 ## Evaluation pack (offline, weakly supervised)
 Use the evaluation harness to run repeatable multi-query RAG checks and compare
