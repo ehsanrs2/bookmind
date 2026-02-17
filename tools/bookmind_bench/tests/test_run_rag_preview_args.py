@@ -20,6 +20,7 @@ def test_rag_preview_args_defaults() -> None:
     assert args.ollama_num_ctx is None
     assert args.ollama_num_predict == 1536
     assert args.ollama_retry_num_predict == 2048
+    assert args.ollama_think is False
     assert args.max_tokens == 512
     assert args.temperature == 0.2
     assert args.show_snippets is False
@@ -85,6 +86,8 @@ def test_cmd_rag_preview_routes_calls(tmp_path, monkeypatch) -> None:
             "1666",
             "--ollama_retry_num_predict",
             "2444",
+            "--ollama_think",
+            "medium",
         ]
     )
 
@@ -100,3 +103,4 @@ def test_cmd_rag_preview_routes_calls(tmp_path, monkeypatch) -> None:
     assert captured["generate_answer"]["temperature"] == 0.4
     assert captured["generate_answer"]["ollama_num_predict"] == 1666
     assert captured["generate_answer"]["ollama_retry_num_predict"] == 2444
+    assert captured["generate_answer"]["ollama_think"] == "medium"

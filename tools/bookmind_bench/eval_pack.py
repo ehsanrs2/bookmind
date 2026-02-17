@@ -274,6 +274,7 @@ def run_eval(
                     temperature=float(gen_cfg.get("temperature", 0.2)),
                     ollama_num_predict=int(gen_cfg.get("ollama_num_predict", 1536)),
                     ollama_retry_num_predict=int(gen_cfg.get("ollama_retry_num_predict", 2048)),
+                    ollama_think=gen_cfg.get("ollama_think", False),
                     fallback_citations=citations,
                     ollama_debug_hook=hook,
                 )
@@ -432,6 +433,7 @@ def run_eval(
                 "temperature": float(gen_cfg.get("temperature", 0.2)),
                 "ollama_num_predict": int(gen_cfg.get("ollama_num_predict", 1536)),
                 "ollama_retry_num_predict": int(gen_cfg.get("ollama_retry_num_predict", 2048)),
+                "ollama_think": gen_cfg.get("ollama_think", False),
             },
         },
         "summary": summary,

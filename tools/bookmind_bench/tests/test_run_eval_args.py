@@ -23,6 +23,7 @@ def test_eval_args_defaults() -> None:
     assert args.ollama_num_ctx is None
     assert args.ollama_num_predict == 1536
     assert args.ollama_retry_num_predict == 2048
+    assert args.ollama_think is False
     assert args.max_tokens == 512
     assert args.temperature == 0.2
     assert args.progress is True
@@ -72,6 +73,8 @@ def test_cmd_eval_parses_content_types_and_bool(tmp_path: Path, monkeypatch) -> 
             "1777",
             "--ollama_retry_num_predict",
             "2555",
+            "--ollama_think",
+            "high",
             "--progress",
             "false",
         ]
@@ -88,6 +91,7 @@ def test_cmd_eval_parses_content_types_and_bool(tmp_path: Path, monkeypatch) -> 
     assert captured["backend_cfg"]["backend"] == "vllm"
     assert captured["gen_cfg"]["ollama_num_predict"] == 1777
     assert captured["gen_cfg"]["ollama_retry_num_predict"] == 2555
+    assert captured["gen_cfg"]["ollama_think"] == "high"
     assert captured["progress"] is False
 
 

@@ -156,6 +156,8 @@ Notes:
 - Use `--content_types text,table,figure_caption` to filter retrieval scope.
 - Use `--max_context_chars` to bound prompt context size.
 - Use `--show_snippets true` to print retrieved snippet previews in the output.
+- For Ollama RAG/eval, default is `--ollama_think false` to prevent empty content;
+  enable thinking only for debugging.
 
 ## Evaluation pack (offline, weakly supervised)
 Use the evaluation harness to run repeatable multi-query RAG checks and compare

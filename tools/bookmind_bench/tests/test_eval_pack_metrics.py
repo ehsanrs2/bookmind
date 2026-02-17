@@ -182,6 +182,7 @@ def test_run_eval_writes_ollama_attempt_artifacts_on_failure(tmp_path: Path, mon
         temperature,
         ollama_num_predict=1536,
         ollama_retry_num_predict=2048,
+        ollama_think=False,
         fallback_citations=None,
         ollama_debug_hook=None,
     ):

@@ -14,6 +14,25 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 
 
+def parse_ollama_think(value: Any) -> bool | str:
+    """Normalize Ollama `think` flag to bool or supported verbosity level."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        cleaned = value.strip().lower()
+    else:
+        cleaned = str(value).strip().lower()
+    if cleaned in {"true", "1", "yes", "y"}:
+        return True
+    if cleaned in {"false", "0", "no", "n"}:
+        return False
+    if cleaned in {"high", "medium", "low"}:
+        return cleaned
+    raise ValueError(
+        f"Invalid Ollama think value: {value!r}. Expected true|false|high|medium|low."
+    )
+
+
 class VLMProvider(ABC):
     """Thin backend abstraction for VLM caption calls."""
 

@@ -16,6 +16,7 @@ from engines.vlm_providers import (
     OllamaProvider,
     OpenAICompatProvider,
     extract_ollama_usage,
+    parse_ollama_think,
     parse_ollama_chat_payload,
 )
 
@@ -459,6 +460,7 @@ def generate_answer(
     temperature: float = 0.2,
     ollama_num_predict: int = 1536,
     ollama_retry_num_predict: int = 2048,
+    ollama_think: bool | str = False,
     fallback_citations: Optional[Sequence[Dict[str, Any]]] = None,
     ollama_debug_hook: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Tuple[str, Optional[Dict[str, Any]]]:
@@ -497,6 +499,7 @@ def generate_answer(
 
     del fallback_citations
     if isinstance(provider, OllamaProvider):
+        think_value = parse_ollama_think(ollama_think)
         num_ctx = getattr(provider, "ollama_num_ctx", None)
         debug_hook = ollama_debug_hook
 
@@ -528,11 +531,11 @@ def generate_answer(
         ]
         last_error: Optional[Exception] = None
         last_failure_fields: Dict[str, Any] = {}
-        saw_thinking_on_retry_empty_content = False
+        saw_empty_content_on_retry = False
         for attempt_index, attempt in enumerate(attempts):
             attempt_messages: List[Dict[str, str]]
             if attempt["name"] == "extractor_json_only":
-                if not saw_thinking_on_retry_empty_content:
+                if not saw_empty_content_on_retry:
                     continue
                 attempt_messages = _build_extractor_messages(messages, context_limit=1000)
             else:
@@ -552,6 +555,7 @@ def generate_answer(
                 "model": provider.model,
                 "messages": attempt_messages,
                 "stream": False,
+                "think": think_value,
                 "options": options,
             }
             attempt_debug: Dict[str, Any] = {
@@ -600,6 +604,7 @@ def generate_answer(
                     except Exception as exc:  # noqa: BLE001
                         attempt_debug["response"]["json_parse_error"] = str(exc)
                         last_failure_fields = {
+                            "failure_mode": "json_parse_error",
                             "done_reason": parsed_payload.get("done_reason"),
                             "eval_count": eval_count,
                             "prompt_eval_count": prompt_eval_count,
@@ -615,16 +620,34 @@ def generate_answer(
                     usage_with_attempt["attempt_index"] = attempt_index
                     usage_with_attempt["attempt_name"] = attempt["name"]
                     return cleaned, usage_with_attempt
+                provider_error_text = parsed_payload.get("error")
+                if isinstance(provider_error_text, str) and provider_error_text.strip():
+                    provider_error_text = provider_error_text.strip()
+                    last_failure_fields = {
+                        "failure_mode": "provider_error",
+                        "done_reason": parsed_payload.get("done_reason"),
+                        "eval_count": eval_count,
+                        "prompt_eval_count": prompt_eval_count,
+                        "raw_response": parsed_payload.get("raw"),
+                    }
+                    last_error = _build_attempt_failure_error(
+                        attempt_name=str(attempt["name"]),
+                        attempt_index=attempt_index,
+                        reason=f"provider error: {provider_error_text}",
+                    )
+                    attempt_debug["response"]["provider_error_only"] = True
+                    continue
                 if thinking:
                     attempt_debug["response"]["empty_content_with_thinking"] = True
                 last_failure_fields = {
+                    "failure_mode": "empty_content",
                     "done_reason": parsed_payload.get("done_reason"),
                     "eval_count": eval_count,
                     "prompt_eval_count": prompt_eval_count,
                     "raw_response": parsed_payload.get("raw"),
                 }
-                if attempt["name"] == "retry_strict_json" and thinking:
-                    saw_thinking_on_retry_empty_content = True
+                if attempt["name"] == "retry_strict_json":
+                    saw_empty_content_on_retry = True
                 last_error = _build_attempt_failure_error(
                     attempt_name=str(attempt["name"]),
                     attempt_index=attempt_index,
@@ -634,6 +657,7 @@ def generate_answer(
             except Exception as exc:
                 last_error = exc
                 last_failure_fields = {
+                    "failure_mode": "provider_exception",
                     "done_reason": None,
                     "eval_count": None,
                     "prompt_eval_count": None,
@@ -654,6 +678,18 @@ def generate_answer(
                 if debug_hook is not None:
                     debug_hook(attempt_debug)
         if last_error is not None and last_failure_fields:
+            if think_value is False and last_failure_fields.get("failure_mode") == "empty_content":
+                raw_head = _truncate_text(
+                    _compact_json(last_failure_fields.get("raw_response"), limit=2000),
+                    500,
+                )
+                raise RuntimeError(
+                    "Ollama returned empty assistant content with think=false; "
+                    f"done_reason={last_failure_fields.get('done_reason')} "
+                    f"eval_count={last_failure_fields.get('eval_count')} "
+                    f"prompt_eval_count={last_failure_fields.get('prompt_eval_count')} "
+                    f"raw_head_500={raw_head}"
+                ) from last_error
             raise RuntimeError(
                 "Ollama generation failed after retry; "
                 f"done_reason={last_failure_fields.get('done_reason')} "

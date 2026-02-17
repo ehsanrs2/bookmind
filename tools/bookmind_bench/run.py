@@ -22,7 +22,7 @@ from engines.vlm_caption_engine import (
     run_vlm_layout,
 )
 from engines.vlm_hook import plan_vlm_jobs
-from engines.vlm_providers import build_vlm_provider
+from engines.vlm_providers import build_vlm_provider, parse_ollama_think
 from bundle import bundle_run
 from eval_pack import load_queries, run_eval, write_reports
 from merge import merge_outputs
@@ -57,6 +57,13 @@ write_jsonl = _io.write_jsonl
 
 def _parse_bool(value: object) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _parse_ollama_think_arg(value: object) -> bool | str:
+    try:
+        return parse_ollama_think(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def _cmd_render(args: argparse.Namespace) -> int:
@@ -542,6 +549,7 @@ def _cmd_rag_preview(args: argparse.Namespace) -> int:
             temperature=args.temperature,
             ollama_num_predict=args.ollama_num_predict,
             ollama_retry_num_predict=args.ollama_retry_num_predict,
+            ollama_think=args.ollama_think,
             fallback_citations=citations,
             ollama_debug_hook=debug_hook,
         )
@@ -595,6 +603,7 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         "temperature": args.temperature,
         "ollama_num_predict": args.ollama_num_predict,
         "ollama_retry_num_predict": args.ollama_retry_num_predict,
+        "ollama_think": args.ollama_think,
     }
 
     results = run_eval(
@@ -1228,6 +1237,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ollama options.num_predict for retry attempt (default 2048)",
     )
     rag_preview.add_argument(
+        "--ollama_think",
+        type=_parse_ollama_think_arg,
+        choices=[False, True, "high", "medium", "low"],
+        default=False,
+        help=(
+            "Ollama top-level think mode for --backend ollama "
+            "(default false; allowed: false,true,high,medium,low)"
+        ),
+    )
+    rag_preview.add_argument(
         "--show_snippets",
         default=False,
         type=_parse_bool,
@@ -1375,6 +1394,16 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=2048,
         help="Ollama options.num_predict for retry attempt (default 2048)",
+    )
+    eval_cmd.add_argument(
+        "--ollama_think",
+        type=_parse_ollama_think_arg,
+        choices=[False, True, "high", "medium", "low"],
+        default=False,
+        help=(
+            "Ollama top-level think mode for --backend ollama "
+            "(default false; allowed: false,true,high,medium,low)"
+        ),
     )
     eval_cmd.add_argument(
         "--timeout_s",
