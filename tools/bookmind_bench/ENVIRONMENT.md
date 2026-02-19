@@ -215,15 +215,15 @@ Output artifacts:
 - `eval/per_query/qNN_retry_request.json` + `qNN_retry_response.json`:
   strict retry request/response debug snapshots (on empty/failure)
 - `eval/per_query/qNN_extract_request.json` + `qNN_extract_response.json`:
-  extractor request/response debug snapshots (on empty/failure)
+  extractor request/response debug snapshots (only when `--ollama_think` is enabled)
 
 Ollama empty-answer retry behavior:
 - Initial request uses configured generation settings.
 - Retry 1 reduces retrieved context in the prompt to a shorter context window.
-- Retry 2 also simplifies the system instruction and uses safer generation
-  settings (`temperature=0.0`, `max_tokens<=256`).
-- If all attempts still return empty/whitespace (or provider errors), the query
-  is marked `status=failed` with `failure_reason` and artifacts are preserved.
+- Retry 2 also simplifies the system instruction and uses safer generation settings.
+- With `--ollama_think false` (default), extractor fallback is skipped for speed/reliability.
+- If all attempts still return empty/whitespace (or provider errors), the query is marked
+  `status=failed` with `failure_reason` and artifacts are preserved.
 
 Heuristic note:
 - `--heuristic_boost_figures true` (default) moves `figure_caption` retrievals

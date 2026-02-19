@@ -386,6 +386,14 @@ def _response_debug_excerpt(parsed_payload: Dict[str, Any]) -> str:
     return _truncate_text(text, 500)
 
 
+def _raw_head_500(value: Any) -> str:
+    if isinstance(value, str):
+        text = value
+    else:
+        text = _compact_json(value, limit=100000)
+    return text[:500]
+
+
 def _build_attempt_failure_error(
     *,
     attempt_name: str,
@@ -682,10 +690,7 @@ def generate_answer(
                     debug_hook(attempt_debug)
         if last_error is not None and last_failure_fields:
             if think_value is False and last_failure_fields.get("failure_mode") == "empty_content":
-                raw_head = _truncate_text(
-                    _compact_json(last_failure_fields.get("raw_response"), limit=2000),
-                    500,
-                )
+                raw_head = _raw_head_500(last_failure_fields.get("raw_response"))
                 raise RuntimeError(
                     "Ollama returned empty assistant content with think=false; "
                     f"done_reason={last_failure_fields.get('done_reason')} "

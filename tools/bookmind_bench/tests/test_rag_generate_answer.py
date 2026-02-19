@@ -479,6 +479,55 @@ def test_generate_answer_ollama_retries_exhausted_raises_without_thinking(monkey
     assert calls["count"] == 2
 
 
+def test_generate_answer_ollama_empty_content_with_thinking_raises_with_raw_excerpt(
+    monkeypatch,
+) -> None:
+    class _FakeResponse:
+        def __init__(self):
+            self.status_code = 200
+            self.headers = {"Content-Type": "application/json"}
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {
+                "message": {"content": "", "thinking": "internal reasoning " * 60},
+                "eval_count": 1536,
+                "prompt_eval_count": 128,
+                "done_reason": "length",
+            }
+
+    calls = {"count": 0}
+
+    def _fake_post(url, json=None, timeout=60):
+        assert json is not None
+        assert json["think"] is False
+        calls["count"] += 1
+        return _FakeResponse()
+
+    monkeypatch.setattr(requests, "post", _fake_post)
+    provider = OllamaProvider(
+        ollama_url="http://127.0.0.1:11434",
+        model="qwen3-vl:latest",
+        ollama_format="json",
+    )
+    try:
+        generate_answer(
+            provider=provider,
+            messages=[{"role": "system", "content": "s"}, {"role": "user", "content": "Q"}],
+        )
+        raise AssertionError("Expected RuntimeError for empty content with think=false")
+    except RuntimeError as exc:
+        err = str(exc)
+        assert "empty assistant content with think=false" in err
+        assert "done_reason=length" in err
+        assert "eval_count=1536" in err
+        assert "prompt_eval_count=128" in err
+        assert "raw_head_500=" in err
+    assert calls["count"] == 2
+
+
 def test_generate_answer_ollama_error_payload_retries_then_raises(monkeypatch) -> None:
     class _FakeResponse:
         status_code = 200
