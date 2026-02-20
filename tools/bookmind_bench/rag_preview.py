@@ -377,6 +377,28 @@ def _build_extractor_messages(
     ]
 
 
+def _build_ultra_short_json_messages(
+    messages: Sequence[Dict[str, str]],
+    *,
+    context_limit: int = 1000,
+) -> List[Dict[str, str]]:
+    query, context = _extract_query_and_context(messages)
+    short_context = _truncate_text(context, context_limit)
+    user_content = (
+        "Q:\n"
+        f"{query}\n\n"
+        "Context:\n"
+        f"{short_context}\n\n"
+        'Return one JSON object only: {"answer":"..."}\n'
+        'Optional: include "citations":[{"page":1,"stable_id":"..."}].\n'
+        "No markdown. No extra keys."
+    )
+    return [
+        {"role": "system", "content": "Answer briefly using only context. No reasoning."},
+        {"role": "user", "content": user_content},
+    ]
+
+
 def _response_debug_excerpt(parsed_payload: Dict[str, Any]) -> str:
     raw = parsed_payload.get("raw")
     if isinstance(raw, str):
@@ -409,9 +431,9 @@ def _build_attempt_failure_error(
 def _artifact_prefix_for_attempt_name(attempt_name: str) -> str:
     if attempt_name == "initial":
         return "ollama"
-    if attempt_name == "retry_strict_json":
+    if attempt_name in {"retry_strict_json", "retry_length_boost"}:
         return "retry"
-    if attempt_name == "extractor_json_only":
+    if attempt_name in {"extractor_json_only", "ultra_short_json"}:
         return "extract"
     return attempt_name
 
@@ -510,45 +532,62 @@ def generate_answer(
         think_value = parse_ollama_think(ollama_think)
         num_ctx = getattr(provider, "ollama_num_ctx", None)
         debug_hook = ollama_debug_hook
+        initial_num_predict = int(ollama_num_predict)
+        length_retry_num_predict = min(
+            max(int(ollama_retry_num_predict), initial_num_predict * 2),
+            4096,
+        )
+        ultra_short_num_predict = min(max(initial_num_predict, 1024), 1536)
 
         attempts = [
             {
                 "name": "initial",
                 "context_limit": None,
-                "num_predict": int(ollama_num_predict),
+                "num_predict": initial_num_predict,
                 "temperature": float(temperature),
                 "simplify_system_prompt": False,
                 "strict_json": False,
+                "use_ultra_short_prompt": False,
+                "requires_retryable_failure": False,
+                "requires_length_done_reason": False,
             },
             {
-                "name": "retry_strict_json",
+                "name": "retry_length_boost",
                 "context_limit": 1200,
-                "num_predict": int(ollama_retry_num_predict),
+                "num_predict": length_retry_num_predict,
                 "temperature": 0.0,
                 "simplify_system_prompt": True,
                 "strict_json": True,
+                "use_ultra_short_prompt": False,
+                "requires_retryable_failure": True,
+                "requires_length_done_reason": True,
+            },
+            {
+                "name": "ultra_short_json",
+                "context_limit": 1000,
+                "num_predict": ultra_short_num_predict,
+                "temperature": 0.0,
+                "simplify_system_prompt": True,
+                "strict_json": False,
+                "use_ultra_short_prompt": True,
+                "requires_retryable_failure": True,
+                "requires_length_done_reason": False,
             },
         ]
-        if think_value is not False:
-            attempts.append(
-                {
-                    "name": "extractor_json_only",
-                    "context_limit": None,
-                    "num_predict": 512,
-                    "temperature": 0.0,
-                    "simplify_system_prompt": True,
-                    "strict_json": False,
-                }
-            )
         last_error: Optional[Exception] = None
         last_failure_fields: Dict[str, Any] = {}
-        saw_empty_content_on_retry = False
+        saw_retryable_failure = False
+        saw_empty_content_with_length = False
         for attempt_index, attempt in enumerate(attempts):
             attempt_messages: List[Dict[str, str]]
-            if attempt["name"] == "extractor_json_only":
-                if not saw_empty_content_on_retry:
-                    continue
-                attempt_messages = _build_extractor_messages(messages, context_limit=1000)
+            if attempt["requires_retryable_failure"] and not saw_retryable_failure:
+                continue
+            if attempt["requires_length_done_reason"] and not saw_empty_content_with_length:
+                continue
+            if attempt["use_ultra_short_prompt"]:
+                attempt_messages = _build_ultra_short_json_messages(
+                    messages, context_limit=int(attempt["context_limit"])
+                )
             else:
                 attempt_messages = _prepare_ollama_retry_messages(
                     messages,
@@ -621,6 +660,12 @@ def generate_answer(
                             "prompt_eval_count": prompt_eval_count,
                             "raw_response": parsed_payload.get("raw"),
                         }
+                        saw_retryable_failure = True
+                        if (
+                            str(parsed_payload.get("done_reason") or "").strip().lower()
+                            == "length"
+                        ):
+                            saw_empty_content_with_length = True
                         last_error = _build_attempt_failure_error(
                             attempt_name=str(attempt["name"]),
                             attempt_index=attempt_index,
@@ -641,6 +686,9 @@ def generate_answer(
                         "prompt_eval_count": prompt_eval_count,
                         "raw_response": parsed_payload.get("raw"),
                     }
+                    saw_retryable_failure = True
+                    if str(parsed_payload.get("done_reason") or "").strip().lower() == "length":
+                        saw_empty_content_with_length = True
                     last_error = _build_attempt_failure_error(
                         attempt_name=str(attempt["name"]),
                         attempt_index=attempt_index,
@@ -657,8 +705,9 @@ def generate_answer(
                     "prompt_eval_count": prompt_eval_count,
                     "raw_response": parsed_payload.get("raw"),
                 }
-                if attempt["name"] == "retry_strict_json":
-                    saw_empty_content_on_retry = True
+                saw_retryable_failure = True
+                if str(parsed_payload.get("done_reason") or "").strip().lower() == "length":
+                    saw_empty_content_with_length = True
                 last_error = _build_attempt_failure_error(
                     attempt_name=str(attempt["name"]),
                     attempt_index=attempt_index,

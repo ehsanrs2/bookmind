@@ -55,6 +55,19 @@ _io = _load_local_io()
 write_jsonl = _io.write_jsonl
 
 
+def _load_ollama_debug_runner():
+    debug_path = Path(__file__).resolve().parent / "scripts" / "debug_ollama_thinking.py"
+    spec = importlib.util.spec_from_file_location("bookmind_ollama_debug", debug_path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"Unable to load ollama debug script at {debug_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    runner = getattr(module, "run_ollama_debug", None)
+    if not callable(runner):
+        raise SystemExit("Ollama debug script does not expose run_ollama_debug")
+    return runner
+
+
 def _parse_bool(value: object) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y"}
 
@@ -628,6 +641,36 @@ def _cmd_eval(args: argparse.Namespace) -> int:
     print(
         f"summary queries={count_queries} avg_total_ms={avg_total_ms} "
         f"avg_num_citations={avg_num_citations}"
+    )
+    return 0
+
+
+def _cmd_ollama_debug(args: argparse.Namespace) -> int:
+    if not Path(args.image).exists():
+        raise SystemExit(f"Image not found: {args.image}")
+    runner = _load_ollama_debug_runner()
+    summary = runner(
+        image=args.image,
+        prompt=args.prompt,
+        ollama_url=args.ollama_url,
+        ollama_model=args.ollama_model,
+        num_predict=args.num_predict,
+        num_ctx=args.num_ctx,
+        think=args.think,
+        format_mode=args.format_mode,
+        trials=args.trials,
+        out_dir=args.out,
+        temperature=args.temperature,
+    )
+    counts = summary.get("counts") if isinstance(summary, dict) else {}
+    print(f"Ollama debug artifacts: {args.out}")
+    print(
+        "summary "
+        f"empty_content={counts.get('empty_content')} "
+        f"empty_content_with_thinking={counts.get('empty_content_with_thinking')} "
+        f"done_reason_length={counts.get('done_reason_length')} "
+        f"eval_count_eq_num_predict={counts.get('eval_count_eq_num_predict')} "
+        f"http_error={counts.get('http_error')}"
     )
     return 0
 
@@ -1418,6 +1461,69 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show per-query eval progress (default true)",
     )
     eval_cmd.set_defaults(func=_cmd_eval)
+
+    ollama_debug = subparsers.add_parser(
+        "ollama-debug",
+        help="Run direct Ollama /api/chat repro loop for empty-content/thinking issues",
+    )
+    ollama_debug.add_argument("--image", required=True, help="Path to local image")
+    ollama_debug.add_argument(
+        "--prompt",
+        default="What does this figure show?",
+        help="Prompt text (default: What does this figure show?)",
+    )
+    ollama_debug.add_argument(
+        "--ollama_url",
+        default=DEFAULT_OLLAMA_URL,
+        help=f"Ollama URL (default {DEFAULT_OLLAMA_URL})",
+    )
+    ollama_debug.add_argument(
+        "--ollama_model",
+        default=DEFAULT_OLLAMA_MODEL,
+        help=f"Ollama model tag (default {DEFAULT_OLLAMA_MODEL})",
+    )
+    ollama_debug.add_argument(
+        "--num_predict",
+        type=int,
+        default=512,
+        help="Ollama options.num_predict (default 512)",
+    )
+    ollama_debug.add_argument(
+        "--num_ctx",
+        type=int,
+        required=False,
+        help="Optional Ollama options.num_ctx override",
+    )
+    ollama_debug.add_argument(
+        "--think",
+        default=False,
+        type=_parse_bool,
+        help="Ollama top-level think flag (default false)",
+    )
+    ollama_debug.add_argument(
+        "--format_mode",
+        choices=["text", "json-in-text"],
+        default="json-in-text",
+        help="Prompt format mode (default json-in-text)",
+    )
+    ollama_debug.add_argument(
+        "--temperature",
+        type=float,
+        default=0.0,
+        help="Sampling temperature (default 0.0)",
+    )
+    ollama_debug.add_argument(
+        "--trials",
+        type=int,
+        default=10,
+        help="Number of attempts (default 10)",
+    )
+    ollama_debug.add_argument(
+        "--out",
+        default="/tmp/bookmind_ollama_debug",
+        help="Artifact directory (default /tmp/bookmind_ollama_debug)",
+    )
+    ollama_debug.set_defaults(func=_cmd_ollama_debug)
 
     return parser
 

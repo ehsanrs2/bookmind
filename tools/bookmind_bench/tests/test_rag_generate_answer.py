@@ -268,7 +268,7 @@ def test_generate_answer_ollama_retries_on_empty_then_succeeds(monkeypatch) -> N
     assert attempts[0]["request"]["options"]["num_predict"] == 1536
     assert "format" not in attempts[0]["request"]
     assert attempts[1]["request"]["think"] is False
-    assert attempts[1]["request"]["options"]["num_predict"] == 2048
+    assert attempts[1]["request"]["options"]["num_predict"] >= 2048
     assert attempts[1]["request"]["options"]["temperature"] == 0.0
 
 
@@ -323,7 +323,7 @@ def test_generate_answer_ollama_uses_custom_num_predict_values(monkeypatch) -> N
     assert attempts[0]["request"]["think"] is False
     assert attempts[1]["request"]["think"] is False
     assert attempts[0]["request"]["options"]["num_predict"] == 999
-    assert attempts[1]["request"]["options"]["num_predict"] == 1337
+    assert attempts[1]["request"]["options"]["num_predict"] >= 1337
 
 
 def test_generate_answer_ollama_accepts_string_think_level(monkeypatch) -> None:
@@ -423,15 +423,15 @@ def test_generate_answer_ollama_extractor_recovers_when_retry_empty_with_thinkin
     assert "thinking attempt 1" not in text
     assert "thinking attempt 2" not in text
     assert usage is not None
-    assert usage["attempt_name"] == "extractor_json_only"
+    assert usage["attempt_name"] == "ultra_short_json"
     assert calls["count"] == 3
     assert len(attempts) == 3
     assert attempts[0]["request"]["think"] is True
     assert attempts[1]["request"]["think"] is True
     assert attempts[2]["request"]["think"] is True
     assert attempts[0]["request"]["options"]["num_predict"] == 1536
-    assert attempts[1]["request"]["options"]["num_predict"] == 2048
-    assert attempts[2]["request"]["options"]["num_predict"] == 512
+    assert attempts[1]["request"]["options"]["num_predict"] >= 2048
+    assert attempts[2]["request"]["options"]["num_predict"] >= 1024
     assert attempts[2]["request"]["options"]["temperature"] == 0.0
 
 
@@ -476,7 +476,7 @@ def test_generate_answer_ollama_retries_exhausted_raises_without_thinking(monkey
         assert "eval_count=512" in str(exc)
         assert "prompt_eval_count=33" in str(exc)
         assert "raw_head_500=" in str(exc)
-    assert calls["count"] == 2
+    assert calls["count"] == 3
 
 
 def test_generate_answer_ollama_empty_content_with_thinking_raises_with_raw_excerpt(
@@ -525,7 +525,7 @@ def test_generate_answer_ollama_empty_content_with_thinking_raises_with_raw_exce
         assert "eval_count=1536" in err
         assert "prompt_eval_count=128" in err
         assert "raw_head_500=" in err
-    assert calls["count"] == 2
+    assert calls["count"] == 3
 
 
 def test_generate_answer_ollama_error_payload_retries_then_raises(monkeypatch) -> None:

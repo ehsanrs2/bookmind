@@ -375,8 +375,9 @@ def run_eval(
             }
             rows.append(row)
             _write_json(items_dir / f"{query_id}.json", row)
+            answer_file_text = answer_text if answer_text else "(empty answer)"
             (per_query_dir / f"{per_query_prefix}_answer.txt").write_text(
-                answer_text + "\n",
+                answer_file_text + "\n",
                 encoding="utf-8",
             )
             _write_json(
