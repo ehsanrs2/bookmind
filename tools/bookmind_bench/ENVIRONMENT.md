@@ -251,6 +251,26 @@ python tools/bookmind_bench/run.py ollama-debug \
   --out /tmp/bookmind_ollama_debug_generate
 ```
 
+## Ollama: CLI vs HTTP (empty content diagnostic)
+Use the same image/prompt/limits across Ollama CLI, `/api/generate`, and `/api/chat`:
+```bash
+python tools/bookmind_bench/scripts/compare_ollama_cli_http.py \
+  --ollama_url http://127.0.0.1:11434 \
+  --model qwen3-vl:latest \
+  --image tools/bookmind_bench/tests/fixtures/figure3_tiny.png \
+  --prompt "What does this figure show? Answer in 1-2 sentences." \
+  --num_predict 256 \
+  --temperature 0.0 \
+  --trials 3 \
+  --out /tmp/bookmind_ollama_compare
+```
+Artifacts are written under:
+- `/tmp/bookmind_ollama_compare/cli/`
+- `/tmp/bookmind_ollama_compare/generate/`
+- `/tmp/bookmind_ollama_compare/chat/`
+- `/tmp/bookmind_ollama_compare/compare_summary.json`
+- `/tmp/bookmind_ollama_compare/compare.md`
+
 Heuristic note:
 - `--heuristic_boost_figures true` (default) moves `figure_caption` retrievals
   earlier when query text suggests diagrams (`figure`, `diagram`, `schematic`,
