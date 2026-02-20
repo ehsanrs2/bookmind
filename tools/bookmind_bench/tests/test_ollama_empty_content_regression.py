@@ -183,6 +183,41 @@ def test_generate_answer_ollama_generate_happy_path(monkeypatch) -> None:
     assert "messages" not in seen_payloads[0]
 
 
+def test_generate_answer_ollama_generate_plain_text_answer(monkeypatch) -> None:
+    class _FakeResponse:
+        def __init__(self):
+            self.status_code = 200
+            self.headers = {"Content-Type": "application/json"}
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {
+                "response": "This figure shows a compact block diagram with two linked stages.",
+                "done_reason": "stop",
+                "eval_count": 70,
+                "prompt_eval_count": 25,
+            }
+
+    def _fake_post(url, json=None, timeout=60):
+        assert url == "http://127.0.0.1:11434/api/generate"
+        return _FakeResponse()
+
+    monkeypatch.setattr(requests, "post", _fake_post)
+    provider = OllamaGenerateProvider(
+        ollama_url="http://127.0.0.1:11434",
+        model="qwen3-vl:latest",
+    )
+    answer, usage = generate_answer(
+        provider=provider,
+        messages=[{"role": "system", "content": "s"}, {"role": "user", "content": "Q"}],
+    )
+    assert answer.startswith("This figure shows")
+    assert usage is not None
+    assert usage["attempt_name"] == "initial"
+
+
 def test_generate_answer_ollama_generate_empty_response_raises(monkeypatch) -> None:
     class _FakeResponse:
         def __init__(self):

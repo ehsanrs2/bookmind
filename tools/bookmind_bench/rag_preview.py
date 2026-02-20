@@ -401,6 +401,40 @@ def _build_ultra_short_json_messages(
     ]
 
 
+def _build_final_answer_first_messages(
+    messages: Sequence[Dict[str, str]],
+    *,
+    context_limit: int = 1200,
+) -> List[Dict[str, str]]:
+    query, context = _extract_query_and_context(messages)
+    short_context = _truncate_text(context, context_limit)
+    user_content = (
+        "Question:\n"
+        f"{query}\n\n"
+        "Context:\n"
+        f"{short_context}\n\n"
+        "Return FINAL ANSWER only in 1-2 concise sentences.\n"
+        "No chain-of-thought. No markdown."
+    )
+    return [
+        {
+            "role": "system",
+            "content": "Provide the final answer directly. Do not output intermediate reasoning.",
+        },
+        {"role": "user", "content": user_content},
+    ]
+
+
+def _normalize_ollama_answer_text(content_text: str) -> str:
+    cleaned = str(content_text or "").strip()
+    if not cleaned:
+        raise ValueError("Ollama returned empty final content")
+    if cleaned.startswith("{") or cleaned.startswith("["):
+        answer, _parsed_citations = _extract_json_answer(cleaned)
+        return answer
+    return cleaned
+
+
 def _messages_to_generate_prompt(messages: Sequence[Dict[str, str]]) -> str:
     lines: List[str] = []
     for msg in messages:
@@ -569,6 +603,7 @@ def generate_answer(
                 "simplify_system_prompt": False,
                 "strict_json": False,
                 "use_ultra_short_prompt": False,
+                "use_final_answer_prompt": False,
                 "requires_retryable_failure": False,
                 "requires_length_done_reason": False,
             },
@@ -578,8 +613,9 @@ def generate_answer(
                 "num_predict": length_retry_num_predict,
                 "temperature": 0.0,
                 "simplify_system_prompt": True,
-                "strict_json": True,
+                "strict_json": False,
                 "use_ultra_short_prompt": False,
+                "use_final_answer_prompt": True,
                 "requires_retryable_failure": True,
                 "requires_length_done_reason": True,
             },
@@ -591,6 +627,7 @@ def generate_answer(
                 "simplify_system_prompt": True,
                 "strict_json": False,
                 "use_ultra_short_prompt": True,
+                "use_final_answer_prompt": False,
                 "requires_retryable_failure": True,
                 "requires_length_done_reason": False,
             },
@@ -606,6 +643,10 @@ def generate_answer(
                 continue
             if attempt["use_ultra_short_prompt"]:
                 attempt_messages = _build_ultra_short_json_messages(
+                    messages, context_limit=int(attempt["context_limit"])
+                )
+            elif attempt["use_final_answer_prompt"]:
+                attempt_messages = _build_final_answer_first_messages(
                     messages, context_limit=int(attempt["context_limit"])
                 )
             else:
@@ -677,7 +718,7 @@ def generate_answer(
                 }
                 if cleaned:
                     try:
-                        cleaned, _parsed_citations = _extract_json_answer(cleaned)
+                        cleaned = _normalize_ollama_answer_text(cleaned)
                     except Exception as exc:  # noqa: BLE001
                         attempt_debug["response"]["json_parse_error"] = str(exc)
                         last_failure_fields = {
@@ -803,6 +844,7 @@ def generate_answer(
                 "simplify_system_prompt": False,
                 "strict_json": False,
                 "use_ultra_short_prompt": False,
+                "use_final_answer_prompt": False,
                 "requires_retryable_failure": False,
                 "requires_length_done_reason": False,
             },
@@ -812,8 +854,9 @@ def generate_answer(
                 "num_predict": length_retry_num_predict,
                 "temperature": 0.0,
                 "simplify_system_prompt": True,
-                "strict_json": True,
+                "strict_json": False,
                 "use_ultra_short_prompt": False,
+                "use_final_answer_prompt": True,
                 "requires_retryable_failure": True,
                 "requires_length_done_reason": True,
             },
@@ -825,6 +868,7 @@ def generate_answer(
                 "simplify_system_prompt": True,
                 "strict_json": False,
                 "use_ultra_short_prompt": True,
+                "use_final_answer_prompt": False,
                 "requires_retryable_failure": True,
                 "requires_length_done_reason": False,
             },
@@ -841,6 +885,10 @@ def generate_answer(
                 continue
             if attempt["use_ultra_short_prompt"]:
                 attempt_messages = _build_ultra_short_json_messages(
+                    messages, context_limit=int(attempt["context_limit"])
+                )
+            elif attempt["use_final_answer_prompt"]:
+                attempt_messages = _build_final_answer_first_messages(
                     messages, context_limit=int(attempt["context_limit"])
                 )
             else:
@@ -905,7 +953,7 @@ def generate_answer(
                 }
                 if cleaned:
                     try:
-                        cleaned, _parsed_citations = _extract_json_answer(cleaned)
+                        cleaned = _normalize_ollama_answer_text(cleaned)
                     except Exception as exc:  # noqa: BLE001
                         attempt_debug["response"]["json_parse_error"] = str(exc)
                         last_failure_fields = {

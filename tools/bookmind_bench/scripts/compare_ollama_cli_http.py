@@ -236,6 +236,7 @@ def run_compare(
     num_predict: int,
     num_ctx: Optional[int],
     temperature: float,
+    think: bool,
     trials: int,
     out: str,
 ) -> Dict[str, Any]:
@@ -251,6 +252,7 @@ def run_compare(
             "prompt": prompt,
             "images": [str(image_path)],
             "options": opts,
+            "think": bool(think),
         }
         _write_json(out_dir / "cli" / f"attempt_{idx:02d}_request.json", cli_request)
         cli_started = time.perf_counter()
@@ -306,6 +308,7 @@ def run_compare(
             "prompt": prompt,
             "images": [image_b64],
             "stream": False,
+            "think": bool(think),
             "options": opts,
         }
         _write_json(out_dir / "generate" / f"attempt_{idx:02d}_request.json", gen_request)
@@ -359,6 +362,7 @@ def run_compare(
             "model": model,
             "stream": False,
             "messages": [{"role": "user", "content": prompt, "images": [image_b64]}],
+            "think": bool(think),
             "options": opts,
         }
         _write_json(out_dir / "chat" / f"attempt_{idx:02d}_request.json", chat_request)
@@ -419,6 +423,7 @@ def run_compare(
         "num_predict": int(num_predict),
         "num_ctx": num_ctx,
         "temperature": float(temperature),
+        "think": bool(think),
         "trials": int(trials),
         "out": str(out_dir),
     }
@@ -454,6 +459,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num_predict", type=int, default=256)
     parser.add_argument("--num_ctx", type=int, required=False)
     parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument(
+        "--think",
+        default=False,
+        type=lambda value: str(value).strip().lower() in {"1", "true", "yes", "y"},
+    )
     parser.add_argument("--trials", type=int, default=3)
     parser.add_argument("--out", default="/tmp/bookmind_ollama_compare")
     return parser
@@ -469,6 +479,7 @@ def main() -> int:
         num_predict=args.num_predict,
         num_ctx=args.num_ctx,
         temperature=args.temperature,
+        think=args.think,
         trials=args.trials,
         out=args.out,
     )
