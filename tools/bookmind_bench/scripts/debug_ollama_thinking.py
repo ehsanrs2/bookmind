@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal Ollama chat reproducer for empty message.content + large thinking."""
+"""Minimal Ollama endpoint reproducer for empty content/response + large thinking."""
 
 from __future__ import annotations
 
@@ -19,9 +19,9 @@ def _load_parser_helpers():
     repo_module_root = Path(__file__).resolve().parents[1]
     if str(repo_module_root) not in sys.path:
         sys.path.insert(0, str(repo_module_root))
-    from engines.vlm_providers import parse_ollama_chat_payload
+    from engines.vlm_providers import parse_ollama_chat_payload, parse_ollama_generate_payload
 
-    return parse_ollama_chat_payload
+    return parse_ollama_chat_payload, parse_ollama_generate_payload
 
 
 def _parse_bool(value: object) -> bool:
@@ -58,8 +58,9 @@ def _write_json(path: Path, payload: Dict[str, Any]) -> None:
 
 def run_ollama_debug(
     *,
-    image: str,
+    image: str | None,
     prompt: str,
+    api: str = "chat",
     ollama_url: str = "http://127.0.0.1:11434",
     ollama_model: str = "qwen3-vl:latest",
     num_predict: int = 512,
@@ -70,13 +71,19 @@ def run_ollama_debug(
     out_dir: str = "/tmp/bookmind_ollama_debug",
     temperature: float = 0.0,
 ) -> Dict[str, Any]:
-    parse_ollama_chat_payload = _load_parser_helpers()
-    image_path = Path(image)
+    parse_ollama_chat_payload, parse_ollama_generate_payload = _load_parser_helpers()
+    image_path = Path(image) if image else None
     output_dir = Path(out_dir)
-    image_b64 = base64.b64encode(image_path.read_bytes()).decode("ascii")
+    image_b64 = (
+        base64.b64encode(image_path.read_bytes()).decode("ascii")
+        if image_path is not None
+        else None
+    )
     messages = _build_messages(prompt=prompt, format_mode=format_mode)
+    api_mode = str(api or "chat").strip().lower()
 
     counts = {
+        "empty_response": 0,
         "empty_content": 0,
         "non_empty_content": 0,
         "with_thinking": 0,
@@ -94,20 +101,35 @@ def run_ollama_debug(
         }
         if isinstance(num_ctx, int) and num_ctx > 0:
             options["num_ctx"] = int(num_ctx)
-        payload: Dict[str, Any] = {
-            "model": str(ollama_model),
-            "messages": [
-                dict(messages[0]),
-                {
-                    "role": "user",
-                    "content": str(messages[1]["content"]),
-                    "images": [image_b64],
-                },
-            ],
-            "stream": False,
-            "think": bool(think),
-            "options": options,
-        }
+        if api_mode == "generate":
+            prompt_lines = [
+                f"System:\n{messages[0]['content']}",
+                f"User:\n{messages[1]['content']}",
+                "Assistant:",
+            ]
+            payload = {
+                "model": str(ollama_model),
+                "prompt": "\n\n".join(prompt_lines),
+                "stream": False,
+                "think": bool(think),
+                "options": options,
+            }
+            target_endpoint = "/api/generate"
+        else:
+            user_payload: Dict[str, Any] = {
+                "role": "user",
+                "content": str(messages[1]["content"]),
+            }
+            if image_b64:
+                user_payload["images"] = [image_b64]
+            payload = {
+                "model": str(ollama_model),
+                "messages": [dict(messages[0]), user_payload],
+                "stream": False,
+                "think": bool(think),
+                "options": options,
+            }
+            target_endpoint = "/api/chat"
         request_path = output_dir / f"attempt_{idx:02d}_request.json"
         response_path = output_dir / f"attempt_{idx:02d}_response.json"
         _write_json(request_path, payload)
@@ -120,7 +142,7 @@ def run_ollama_debug(
         }
         try:
             response = requests.post(
-                str(ollama_url).rstrip("/") + "/api/chat",
+                str(ollama_url).rstrip("/") + target_endpoint,
                 json=payload,
                 timeout=120,
             )
@@ -130,9 +152,15 @@ def run_ollama_debug(
             except Exception:
                 raw_payload = {"raw_text": response.text}
             elapsed_ms = int(round((time.perf_counter() - started) * 1000))
-            parsed = parse_ollama_chat_payload(raw_payload)
+            parsed = (
+                parse_ollama_generate_payload(raw_payload)
+                if api_mode == "generate"
+                else parse_ollama_chat_payload(raw_payload)
+            )
             answer = str(parsed.get("answer_text") or "")
             thinking = str(parsed.get("thinking_text") or "")
+            if not thinking and isinstance(raw_payload, dict):
+                thinking = str(raw_payload.get("thinking") or "")
             done_reason = str(parsed.get("done_reason") or "")
             eval_count = (
                 raw_payload.get("eval_count")
@@ -145,6 +173,8 @@ def run_ollama_debug(
                 else None
             )
             empty_content = not answer.strip()
+            if empty_content:
+                counts["empty_response"] += 1
             has_thinking = bool(thinking.strip())
             if empty_content:
                 counts["empty_content"] += 1
@@ -181,7 +211,8 @@ def run_ollama_debug(
 
     summary = {
         "config": {
-            "image": str(image_path),
+            "image": str(image_path) if image_path is not None else None,
+            "api": api_mode,
             "ollama_url": ollama_url,
             "ollama_model": ollama_model,
             "num_predict": int(num_predict),
@@ -202,7 +233,17 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Reproduce Ollama empty-content/thinking behavior without Qdrant.",
     )
-    parser.add_argument("--image", required=True, help="Path to local image file")
+    parser.add_argument(
+        "--api",
+        choices=["chat", "generate"],
+        default="chat",
+        help="Ollama endpoint mode (default chat)",
+    )
+    parser.add_argument(
+        "--image",
+        required=False,
+        help="Optional local image file path (used in chat mode)",
+    )
     parser.add_argument("--prompt", default="What does this figure show?", help="User prompt")
     parser.add_argument(
         "--ollama_url",
@@ -244,6 +285,7 @@ def main() -> int:
     summary = run_ollama_debug(
         image=args.image,
         prompt=args.prompt,
+        api=args.api,
         ollama_url=args.ollama_url,
         ollama_model=args.ollama_model,
         num_predict=args.num_predict,
@@ -258,6 +300,7 @@ def main() -> int:
     print(f"Saved debug artifacts to {args.out}")
     print(
         "counts "
+        f"empty_response={counts.get('empty_response')} "
         f"empty_content={counts.get('empty_content')} "
         f"empty_content_with_thinking={counts.get('empty_content_with_thinking')} "
         f"done_reason_length={counts.get('done_reason_length')} "

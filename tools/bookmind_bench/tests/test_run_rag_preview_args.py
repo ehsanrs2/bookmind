@@ -18,6 +18,7 @@ def test_rag_preview_args_defaults() -> None:
     assert args.ollama_model == "qwen3-vl:latest"
     assert args.ollama_format == "text"
     assert args.ollama_num_ctx is None
+    assert args.ollama_api == "generate"
     assert args.ollama_num_predict == 1536
     assert args.ollama_retry_num_predict == 2048
     assert args.ollama_think is False
@@ -88,6 +89,8 @@ def test_cmd_rag_preview_routes_calls(tmp_path, monkeypatch) -> None:
             "2444",
             "--ollama_think",
             "medium",
+            "--ollama_api",
+            "chat",
         ]
     )
 
@@ -99,6 +102,7 @@ def test_cmd_rag_preview_routes_calls(tmp_path, monkeypatch) -> None:
     assert captured["search"]["hf_timeout_s"] == 41
     assert captured["search"]["hf_retries"] == 6
     assert captured["provider"]["backend"] == "ollama"
+    assert captured["provider"]["ollama_api"] == "chat"
     assert captured["generate_answer"]["max_tokens"] == 123
     assert captured["generate_answer"]["temperature"] == 0.4
     assert captured["generate_answer"]["ollama_num_predict"] == 1666

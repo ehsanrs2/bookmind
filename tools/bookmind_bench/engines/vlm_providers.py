@@ -199,6 +199,28 @@ def parse_ollama_chat_payload(payload: Any) -> Dict[str, Any]:
     }
 
 
+def parse_ollama_generate_payload(payload: Any) -> Dict[str, Any]:
+    """Parse assistant content from Ollama `/api/generate` payload variants."""
+    parsed = parse_ollama_chat_payload(payload)
+    if not isinstance(payload, dict):
+        return parsed
+    answer_text = parsed.get("answer_text")
+    source = parsed.get("source")
+    if answer_text is None:
+        response_text = payload.get("response")
+        if isinstance(response_text, str):
+            answer_text = response_text
+            source = "response"
+    if answer_text is None:
+        text_field = payload.get("text")
+        if isinstance(text_field, str):
+            answer_text = text_field
+            source = "text"
+    parsed["answer_text"] = answer_text
+    parsed["source"] = source
+    return parsed
+
+
 def extract_ollama_usage(parsed: Any, timing_ms: Optional[int] = None) -> Dict[str, Any]:
     usage: Dict[str, Any] = {}
     if isinstance(parsed, dict):
@@ -324,6 +346,22 @@ class OllamaProvider(VLMProvider):
         return content.strip(), usage
 
 
+class OllamaGenerateProvider:
+    """Text-only Ollama provider for RAG/eval via `/api/generate`."""
+
+    def __init__(
+        self,
+        ollama_url: str,
+        model: str,
+        timeout_s: int = 60,
+        ollama_num_ctx: Optional[int] = None,
+    ) -> None:
+        self.ollama_url = ollama_url.rstrip("/")
+        self.model = model
+        self.timeout_s = timeout_s
+        self.ollama_num_ctx = ollama_num_ctx
+
+
 def build_vlm_provider(
     *,
     backend: str,
@@ -334,9 +372,18 @@ def build_vlm_provider(
     timeout_s: int = 60,
     ollama_format: str = "text",
     ollama_num_ctx: Optional[int] = None,
-) -> VLMProvider:
+    ollama_api: str = "chat",
+) -> Any:
     backend_norm = backend.strip().lower()
     if backend_norm == "ollama":
+        ollama_api_norm = str(ollama_api or "chat").strip().lower()
+        if ollama_api_norm == "generate":
+            return OllamaGenerateProvider(
+                ollama_url=ollama_url,
+                model=ollama_model,
+                timeout_s=timeout_s,
+                ollama_num_ctx=ollama_num_ctx,
+            )
         return OllamaProvider(
             ollama_url=ollama_url,
             model=ollama_model,

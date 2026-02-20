@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import requests
 
-from engines.vlm_providers import OllamaProvider
+from engines.vlm_providers import OllamaGenerateProvider, OllamaProvider
 from rag_preview import generate_answer
 
 
@@ -138,6 +138,98 @@ def test_generate_answer_length_retry_recovers_with_ultra_short_fallback(monkeyp
     assert requests_seen[2]["options"]["num_predict"] >= 1024
 
 
+def test_generate_answer_ollama_generate_happy_path(monkeypatch) -> None:
+    class _FakeResponse:
+        def __init__(self):
+            self.status_code = 200
+            self.headers = {"Content-Type": "application/json"}
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {
+                "response": '{"answer":"ok from generate","citations":[]}',
+                "done_reason": "stop",
+                "eval_count": 80,
+                "prompt_eval_count": 40,
+            }
+
+    seen_payloads = []
+
+    def _fake_post(url, json=None, timeout=60):
+        assert url == "http://127.0.0.1:11434/api/generate"
+        assert json is not None
+        seen_payloads.append(json)
+        return _FakeResponse()
+
+    monkeypatch.setattr(requests, "post", _fake_post)
+    provider = OllamaGenerateProvider(
+        ollama_url="http://127.0.0.1:11434",
+        model="qwen3-vl:latest",
+    )
+    answer, usage = generate_answer(
+        provider=provider,
+        messages=[{"role": "system", "content": "s"}, {"role": "user", "content": "Q"}],
+        ollama_think=False,
+        ollama_num_predict=512,
+    )
+
+    assert answer == "ok from generate"
+    assert usage is not None
+    assert usage["ollama_api"] == "generate"
+    assert seen_payloads[0]["think"] is False
+    assert "prompt" in seen_payloads[0]
+    assert "messages" not in seen_payloads[0]
+
+
+def test_generate_answer_ollama_generate_empty_response_raises(monkeypatch) -> None:
+    class _FakeResponse:
+        def __init__(self):
+            self.status_code = 200
+            self.headers = {"Content-Type": "application/json"}
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {
+                "response": " ",
+                "thinking": "some large reasoning",
+                "done_reason": "length",
+                "eval_count": 512,
+                "prompt_eval_count": 31,
+            }
+
+    calls = {"count": 0}
+
+    def _fake_post(url, json=None, timeout=60):
+        assert url == "http://127.0.0.1:11434/api/generate"
+        calls["count"] += 1
+        return _FakeResponse()
+
+    monkeypatch.setattr(requests, "post", _fake_post)
+    provider = OllamaGenerateProvider(
+        ollama_url="http://127.0.0.1:11434",
+        model="qwen3-vl:latest",
+    )
+    with pytest.raises(RuntimeError) as exc_info:
+        generate_answer(
+            provider=provider,
+            messages=[{"role": "system", "content": "s"}, {"role": "user", "content": "Q"}],
+            ollama_think=False,
+            ollama_num_predict=512,
+            ollama_retry_num_predict=1024,
+        )
+    text = str(exc_info.value)
+    assert "empty response with think=false" in text
+    assert "done_reason=length" in text
+    assert "eval_count=512" in text
+    assert "prompt_eval_count=31" in text
+    assert "raw_head_500=" in text
+    assert calls["count"] == 3
+
+
 def test_ollama_integration_repro_modes(tmp_path: Path) -> None:
     if os.getenv("BOOKMIND_OLLAMA_INTEGRATION") != "1":
         pytest.skip("Set BOOKMIND_OLLAMA_INTEGRATION=1 to run local Ollama integration checks.")
@@ -151,6 +243,7 @@ def test_ollama_integration_repro_modes(tmp_path: Path) -> None:
     text_summary = run_ollama_debug(
         image=str(fixture),
         prompt="What does this figure show?",
+        api="chat",
         format_mode="text",
         think=False,
         num_predict=256,
@@ -165,6 +258,7 @@ def test_ollama_integration_repro_modes(tmp_path: Path) -> None:
     strict_summary = run_ollama_debug(
         image=str(fixture),
         prompt="What does this figure show?",
+        api="chat",
         format_mode="json-in-text",
         think=False,
         num_predict=256,
@@ -179,3 +273,17 @@ def test_ollama_integration_repro_modes(tmp_path: Path) -> None:
             "Strict json-in-text did not reproduce empty-content-with-thinking in this run; "
             "re-run integration for reproduction stats."
         )
+
+    generate_summary = run_ollama_debug(
+        image=None,
+        prompt="Answer with one short JSON object.",
+        api="generate",
+        format_mode="json-in-text",
+        think=False,
+        num_predict=256,
+        trials=3,
+        out_dir=str(tmp_path / "generate_mode"),
+        temperature=0.0,
+    )
+    generate_counts = generate_summary["counts"]
+    assert generate_counts["http_error"] == 0

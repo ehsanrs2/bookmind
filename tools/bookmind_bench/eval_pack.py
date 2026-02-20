@@ -206,6 +206,7 @@ def run_eval(
         ollama_model=str(backend_cfg.get("ollama_model") or "qwen3-vl:latest"),
         ollama_format=str(backend_cfg.get("ollama_format") or "text"),
         ollama_num_ctx=backend_cfg.get("ollama_num_ctx"),
+        ollama_api=str(backend_cfg.get("ollama_api") or "chat"),
     )
 
     rows: List[Dict[str, Any]] = []

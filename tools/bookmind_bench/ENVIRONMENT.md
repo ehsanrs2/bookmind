@@ -134,6 +134,7 @@ python tools/bookmind_bench/run.py rag-preview \
   --hf_timeout_s 30 \
   --hf_retries 3 \
   --backend ollama \
+  --ollama_api generate \
   --ollama_url http://127.0.0.1:11434 \
   --ollama_model qwen3-vl:latest
 ```
@@ -158,6 +159,8 @@ Notes:
 - Use `--show_snippets true` to print retrieved snippet previews in the output.
 - For Ollama RAG/eval, default is `--ollama_think false` to prevent empty content;
   enable thinking only for debugging.
+- For Ollama RAG/eval, default is `--ollama_api generate` (text endpoint) for
+  better reliability on text-only prompts; use `--ollama_api chat` to compare behavior.
 - With `--ollama_think false`, RAG/eval avoids the extractor fallback stage and
   raises with debug artifacts if Ollama still returns empty `message.content`.
 
@@ -182,6 +185,7 @@ python tools/bookmind_bench/run.py eval \
   --hf_timeout_s 30 \
   --hf_retries 3 \
   --backend ollama \
+  --ollama_api generate \
   --ollama_url http://127.0.0.1:11434 \
   --ollama_model qwen3-vl:latest \
   --top_k 8 \
@@ -224,6 +228,28 @@ Ollama empty-answer retry behavior:
 - With `--ollama_think false` (default), extractor fallback is skipped for speed/reliability.
 - If all attempts still return empty/whitespace (or provider errors), the query is marked
   `status=failed` with `failure_reason` and artifacts are preserved.
+
+Ollama endpoint debug (compare chat vs generate):
+```bash
+python tools/bookmind_bench/run.py ollama-debug \
+  --api chat \
+  --image tools/bookmind_bench/tests/fixtures/figure3_tiny.png \
+  --prompt "What does this figure show?" \
+  --format_mode json-in-text \
+  --think false \
+  --num_predict 512 \
+  --trials 5 \
+  --out /tmp/bookmind_ollama_debug_chat
+
+python tools/bookmind_bench/run.py ollama-debug \
+  --api generate \
+  --prompt "What does Figure 3 show?" \
+  --format_mode json-in-text \
+  --think false \
+  --num_predict 512 \
+  --trials 5 \
+  --out /tmp/bookmind_ollama_debug_generate
+```
 
 Heuristic note:
 - `--heuristic_boost_figures true` (default) moves `figure_caption` retrievals

@@ -8,18 +8,10 @@ import os
 from pathlib import Path
 
 from engines.marker_engine import run_marker_pdf
-from engines.layout_engine import run_layoutparser
 from engines.paddleocr_engine import (
     list_page_images,
     run_paddleocr,
     run_paddleocr_on_image,
-)
-from engines.vlm_caption_engine import (
-    DEFAULT_BACKEND,
-    DEFAULT_OLLAMA_MODEL,
-    DEFAULT_OLLAMA_URL,
-    run_vlm_caption_jobs,
-    run_vlm_layout,
 )
 from engines.vlm_hook import plan_vlm_jobs
 from engines.vlm_providers import build_vlm_provider, parse_ollama_think
@@ -38,7 +30,10 @@ from rag_preview import (
     generate_answer,
     write_rag_preview_ollama_failure_artifacts,
 )
-from render_pdf import parse_pages, render_pdf_pages
+
+DEFAULT_BACKEND = "vllm"
+DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
+DEFAULT_OLLAMA_MODEL = "qwen3-vl:latest"
 
 
 def _load_local_io() -> object:
@@ -80,6 +75,8 @@ def _parse_ollama_think_arg(value: object) -> bool | str:
 
 
 def _cmd_render(args: argparse.Namespace) -> int:
+    from render_pdf import parse_pages, render_pdf_pages
+
     pdf_path = Path(args.pdf)
     out_dir = Path(args.out)
 
@@ -108,6 +105,8 @@ def _cmd_render(args: argparse.Namespace) -> int:
 
 
 def _cmd_marker(args: argparse.Namespace) -> int:
+    from render_pdf import parse_pages
+
     pdf_path = Path(args.pdf)
     out_dir = Path(args.out)
 
@@ -159,6 +158,8 @@ def _resolve_paddleocr_cache_dir(arg_value: str | None) -> str | None:
 
 
 def _cmd_paddleocr(args: argparse.Namespace) -> int:
+    from render_pdf import parse_pages
+
     img_dir = Path(args.imgdir)
     out_dir = Path(args.out)
 
@@ -209,6 +210,8 @@ def _resolve_layout_model_dir(arg_value: str | None) -> str:
 
 
 def _cmd_layout(args: argparse.Namespace) -> int:
+    from engines.layout_engine import run_layoutparser
+
     img_dir = Path(args.imgdir)
     out_dir = Path(args.out)
 
@@ -279,6 +282,8 @@ def _cmd_paddleocr_smoke(args: argparse.Namespace) -> int:
 
 
 def _cmd_vlm(args: argparse.Namespace) -> int:
+    from engines.vlm_caption_engine import run_vlm_caption_jobs
+
     out_dir = Path(args.out)
     jobs_path = Path(args.jobs)
     paddleocr_path = Path(args.paddleocr_jsonl) if args.paddleocr_jsonl else None
@@ -322,6 +327,8 @@ def _cmd_vlm(args: argparse.Namespace) -> int:
 
 
 def _cmd_vlm_layout(args: argparse.Namespace) -> int:
+    from engines.vlm_caption_engine import run_vlm_layout
+
     out_dir = Path(args.out)
     layout_path = (
         Path(args.layout_json)
@@ -551,6 +558,7 @@ def _cmd_rag_preview(args: argparse.Namespace) -> int:
         ollama_model=args.ollama_model,
         ollama_format=args.ollama_format,
         ollama_num_ctx=args.ollama_num_ctx,
+        ollama_api=args.ollama_api,
     )
     ollama_attempts = []
     debug_hook = ollama_attempts.append if args.backend == "ollama" else None
@@ -598,6 +606,7 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         "ollama_model": args.ollama_model,
         "ollama_format": args.ollama_format,
         "ollama_num_ctx": args.ollama_num_ctx,
+        "ollama_api": args.ollama_api,
     }
     retrieval_cfg = {
         "top_k": args.top_k,
@@ -646,7 +655,7 @@ def _cmd_eval(args: argparse.Namespace) -> int:
 
 
 def _cmd_ollama_debug(args: argparse.Namespace) -> int:
-    if not Path(args.image).exists():
+    if args.image and not Path(args.image).exists():
         raise SystemExit(f"Image not found: {args.image}")
     runner = _load_ollama_debug_runner()
     summary = runner(
@@ -654,6 +663,7 @@ def _cmd_ollama_debug(args: argparse.Namespace) -> int:
         prompt=args.prompt,
         ollama_url=args.ollama_url,
         ollama_model=args.ollama_model,
+        api=args.api,
         num_predict=args.num_predict,
         num_ctx=args.num_ctx,
         think=args.think,
@@ -666,6 +676,7 @@ def _cmd_ollama_debug(args: argparse.Namespace) -> int:
     print(f"Ollama debug artifacts: {args.out}")
     print(
         "summary "
+        f"empty_response={counts.get('empty_response')} "
         f"empty_content={counts.get('empty_content')} "
         f"empty_content_with_thinking={counts.get('empty_content_with_thinking')} "
         f"done_reason_length={counts.get('done_reason_length')} "
@@ -1256,6 +1267,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional Ollama options.num_ctx override",
     )
     rag_preview.add_argument(
+        "--ollama_api",
+        choices=["chat", "generate"],
+        default="generate",
+        help="Ollama endpoint mode for RAG (default generate)",
+    )
+    rag_preview.add_argument(
         "--max_tokens",
         type=int,
         default=512,
@@ -1415,6 +1432,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional Ollama options.num_ctx override",
     )
     eval_cmd.add_argument(
+        "--ollama_api",
+        choices=["chat", "generate"],
+        default="generate",
+        help="Ollama endpoint mode for eval (default generate)",
+    )
+    eval_cmd.add_argument(
         "--max_tokens",
         type=int,
         default=512,
@@ -1464,9 +1487,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     ollama_debug = subparsers.add_parser(
         "ollama-debug",
-        help="Run direct Ollama /api/chat repro loop for empty-content/thinking issues",
+        help="Run direct Ollama debug loop for empty-content/thinking issues",
     )
-    ollama_debug.add_argument("--image", required=True, help="Path to local image")
+    ollama_debug.add_argument(
+        "--api",
+        choices=["chat", "generate"],
+        default="chat",
+        help="Ollama endpoint mode (default chat)",
+    )
+    ollama_debug.add_argument(
+        "--image",
+        required=False,
+        help="Optional local image path (used by chat mode)",
+    )
     ollama_debug.add_argument(
         "--prompt",
         default="What does this figure show?",

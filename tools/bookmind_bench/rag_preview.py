@@ -13,9 +13,11 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 import requests
 
 from engines.vlm_providers import (
+    OllamaGenerateProvider,
     OllamaProvider,
     OpenAICompatProvider,
     extract_ollama_usage,
+    parse_ollama_generate_payload,
     parse_ollama_think,
     parse_ollama_chat_payload,
 )
@@ -399,6 +401,25 @@ def _build_ultra_short_json_messages(
     ]
 
 
+def _messages_to_generate_prompt(messages: Sequence[Dict[str, str]]) -> str:
+    lines: List[str] = []
+    for msg in messages:
+        role = str(msg.get("role") or "user").strip().lower()
+        content = str(msg.get("content") or "").strip()
+        if not content:
+            continue
+        if role == "system":
+            lines.append(f"System:\n{content}")
+        elif role == "assistant":
+            lines.append(f"Assistant:\n{content}")
+        else:
+            lines.append(f"User:\n{content}")
+    if not lines:
+        return "User:\nPlease answer the question."
+    lines.append("Assistant:")
+    return "\n\n".join(lines)
+
+
 def _response_debug_excerpt(parsed_payload: Dict[str, Any]) -> str:
     raw = parsed_payload.get("raw")
     if isinstance(raw, str):
@@ -528,6 +549,240 @@ def generate_answer(
         return content.strip(), usage
 
     del fallback_citations
+    if isinstance(provider, OllamaGenerateProvider):
+        think_value = parse_ollama_think(ollama_think)
+        num_ctx = getattr(provider, "ollama_num_ctx", None)
+        debug_hook = ollama_debug_hook
+        initial_num_predict = int(ollama_num_predict)
+        length_retry_num_predict = min(
+            max(int(ollama_retry_num_predict), initial_num_predict * 2),
+            4096,
+        )
+        ultra_short_num_predict = min(max(initial_num_predict, 1024), 1536)
+
+        attempts = [
+            {
+                "name": "initial",
+                "context_limit": None,
+                "num_predict": initial_num_predict,
+                "temperature": float(temperature),
+                "simplify_system_prompt": False,
+                "strict_json": False,
+                "use_ultra_short_prompt": False,
+                "requires_retryable_failure": False,
+                "requires_length_done_reason": False,
+            },
+            {
+                "name": "retry_length_boost",
+                "context_limit": 1200,
+                "num_predict": length_retry_num_predict,
+                "temperature": 0.0,
+                "simplify_system_prompt": True,
+                "strict_json": True,
+                "use_ultra_short_prompt": False,
+                "requires_retryable_failure": True,
+                "requires_length_done_reason": True,
+            },
+            {
+                "name": "ultra_short_json",
+                "context_limit": 1000,
+                "num_predict": ultra_short_num_predict,
+                "temperature": 0.0,
+                "simplify_system_prompt": True,
+                "strict_json": False,
+                "use_ultra_short_prompt": True,
+                "requires_retryable_failure": True,
+                "requires_length_done_reason": False,
+            },
+        ]
+        last_error: Optional[Exception] = None
+        last_failure_fields: Dict[str, Any] = {}
+        saw_retryable_failure = False
+        saw_empty_content_with_length = False
+        for attempt_index, attempt in enumerate(attempts):
+            if attempt["requires_retryable_failure"] and not saw_retryable_failure:
+                continue
+            if attempt["requires_length_done_reason"] and not saw_empty_content_with_length:
+                continue
+            if attempt["use_ultra_short_prompt"]:
+                attempt_messages = _build_ultra_short_json_messages(
+                    messages, context_limit=int(attempt["context_limit"])
+                )
+            else:
+                attempt_messages = _prepare_ollama_retry_messages(
+                    messages,
+                    context_limit=attempt["context_limit"],
+                    simplify_system_prompt=attempt["simplify_system_prompt"],
+                    strict_json=attempt["strict_json"],
+                )
+            options: Dict[str, Any] = {
+                "num_predict": attempt["num_predict"],
+                "temperature": attempt["temperature"],
+            }
+            if isinstance(num_ctx, int) and num_ctx > 0:
+                options["num_ctx"] = int(num_ctx)
+            payload: Dict[str, Any] = {
+                "model": provider.model,
+                "prompt": _messages_to_generate_prompt(attempt_messages),
+                "stream": False,
+                "think": think_value,
+                "options": options,
+            }
+            attempt_debug: Dict[str, Any] = {
+                "attempt_index": attempt_index,
+                "attempt_name": attempt["name"],
+                "request": payload,
+            }
+            started = time.perf_counter()
+            response = None
+            parsed: Any = None
+            try:
+                response = requests.post(
+                    provider.ollama_url + "/api/generate",
+                    json=payload,
+                    timeout=provider.timeout_s,
+                )
+                attempt_debug["http_status"] = int(getattr(response, "status_code", 200))
+                attempt_debug["response_headers"] = _ollama_header_subset(
+                    getattr(response, "headers", {})
+                )
+                response.raise_for_status()
+                parsed = _decode_ollama_response(response)
+                parsed_payload = parse_ollama_generate_payload(parsed)
+                content = parsed_payload.get("answer_text")
+                thinking = str(
+                    (parsed_payload.get("thinking_text") or "")
+                    if isinstance(parsed_payload, dict)
+                    else ""
+                ).strip()
+                if not thinking and isinstance(parsed, dict):
+                    thinking = str(parsed.get("thinking") or "").strip()
+                cleaned = str(content or "").strip()
+                usage = extract_ollama_usage(parsed)
+                prompt_eval_count = usage.get("prompt_eval_count")
+                eval_count = usage.get("eval_count")
+                done_reason = parsed_payload.get("done_reason")
+                attempt_debug["response"] = {
+                    "raw": parsed_payload.get("raw"),
+                    "raw_head_500": _response_debug_excerpt(parsed_payload),
+                    "parsed_keys": parsed_payload.get("parsed_keys"),
+                    "content_source": parsed_payload.get("source"),
+                    "done_reason": done_reason,
+                    "provider_error": parsed_payload.get("error"),
+                    "thinking_len_chars": len(thinking),
+                    "answer_len_chars": len(cleaned),
+                    "prompt_eval_count": prompt_eval_count,
+                    "eval_count": eval_count,
+                    "usage": usage,
+                }
+                if cleaned:
+                    try:
+                        cleaned, _parsed_citations = _extract_json_answer(cleaned)
+                    except Exception as exc:  # noqa: BLE001
+                        attempt_debug["response"]["json_parse_error"] = str(exc)
+                        last_failure_fields = {
+                            "failure_mode": "json_parse_error",
+                            "done_reason": done_reason,
+                            "eval_count": eval_count,
+                            "prompt_eval_count": prompt_eval_count,
+                            "raw_response": parsed_payload.get("raw"),
+                        }
+                        saw_retryable_failure = True
+                        if str(done_reason or "").strip().lower() == "length":
+                            saw_empty_content_with_length = True
+                        last_error = _build_attempt_failure_error(
+                            attempt_name=str(attempt["name"]),
+                            attempt_index=attempt_index,
+                            reason=str(exc),
+                        )
+                        continue
+                    usage_with_attempt = dict(usage)
+                    usage_with_attempt["attempt_index"] = attempt_index
+                    usage_with_attempt["attempt_name"] = attempt["name"]
+                    usage_with_attempt["ollama_api"] = "generate"
+                    return cleaned, usage_with_attempt
+                provider_error_text = parsed_payload.get("error")
+                if isinstance(provider_error_text, str) and provider_error_text.strip():
+                    provider_error_text = provider_error_text.strip()
+                    last_failure_fields = {
+                        "failure_mode": "provider_error",
+                        "done_reason": done_reason,
+                        "eval_count": eval_count,
+                        "prompt_eval_count": prompt_eval_count,
+                        "raw_response": parsed_payload.get("raw"),
+                    }
+                    saw_retryable_failure = True
+                    if str(done_reason or "").strip().lower() == "length":
+                        saw_empty_content_with_length = True
+                    last_error = _build_attempt_failure_error(
+                        attempt_name=str(attempt["name"]),
+                        attempt_index=attempt_index,
+                        reason=f"provider error: {provider_error_text}",
+                    )
+                    attempt_debug["response"]["provider_error_only"] = True
+                    continue
+                if thinking:
+                    attempt_debug["response"]["empty_content_with_thinking"] = True
+                last_failure_fields = {
+                    "failure_mode": "empty_content",
+                    "done_reason": done_reason,
+                    "eval_count": eval_count,
+                    "prompt_eval_count": prompt_eval_count,
+                    "raw_response": parsed_payload.get("raw"),
+                }
+                saw_retryable_failure = True
+                if str(done_reason or "").strip().lower() == "length":
+                    saw_empty_content_with_length = True
+                last_error = _build_attempt_failure_error(
+                    attempt_name=str(attempt["name"]),
+                    attempt_index=attempt_index,
+                    reason="empty response",
+                )
+                attempt_debug["response"]["empty_answer"] = True
+            except Exception as exc:
+                last_error = exc
+                last_failure_fields = {
+                    "failure_mode": "provider_exception",
+                    "done_reason": None,
+                    "eval_count": None,
+                    "prompt_eval_count": None,
+                    "raw_response": parsed,
+                }
+                attempt_debug["response"] = {
+                    "raw": parsed,
+                    "raw_head_500": _truncate_text(_compact_json(parsed, limit=2000), 500),
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            finally:
+                elapsed_ms = int(round((time.perf_counter() - started) * 1000))
+                attempt_debug["timing_ms"] = elapsed_ms
+                attempt_debug["status_code"] = int(
+                    getattr(response, "status_code", attempt_debug.get("http_status", 0)) or 0
+                )
+                if debug_hook is not None:
+                    debug_hook(attempt_debug)
+        if last_error is not None and last_failure_fields:
+            if think_value is False and last_failure_fields.get("failure_mode") == "empty_content":
+                raw_head = _raw_head_500(last_failure_fields.get("raw_response"))
+                raise RuntimeError(
+                    "Ollama returned empty response with think=false; "
+                    f"done_reason={last_failure_fields.get('done_reason')} "
+                    f"eval_count={last_failure_fields.get('eval_count')} "
+                    f"prompt_eval_count={last_failure_fields.get('prompt_eval_count')} "
+                    f"raw_head_500={raw_head}"
+                ) from last_error
+            raise RuntimeError(
+                "Ollama generation failed after retry; "
+                f"done_reason={last_failure_fields.get('done_reason')} "
+                f"eval_count={last_failure_fields.get('eval_count')} "
+                f"prompt_eval_count={last_failure_fields.get('prompt_eval_count')} "
+                f"raw_response={_compact_json(last_failure_fields.get('raw_response'))}"
+            ) from last_error
+        raise RuntimeError(
+            "Ollama generation failed after retry; see saved request/response artifacts."
+        ) from last_error
+
     if isinstance(provider, OllamaProvider):
         think_value = parse_ollama_think(ollama_think)
         num_ctx = getattr(provider, "ollama_num_ctx", None)

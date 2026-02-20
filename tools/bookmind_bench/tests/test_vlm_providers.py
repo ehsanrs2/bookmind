@@ -6,6 +6,7 @@ from pathlib import Path
 import requests
 
 from engines.vlm_providers import (
+    OllamaGenerateProvider,
     OllamaProvider,
     OpenAICompatProvider,
     build_vlm_provider,
@@ -138,3 +139,15 @@ def test_provider_factory_backend_switch() -> None:
     )
     assert isinstance(vllm_provider, OpenAICompatProvider)
     assert isinstance(ollama_provider, OllamaProvider)
+
+
+def test_provider_factory_ollama_generate_mode() -> None:
+    provider = build_vlm_provider(
+        backend="ollama",
+        endpoint="http://127.0.0.1:8000/v1",
+        model="qwen3-vl",
+        ollama_url="http://127.0.0.1:11434",
+        ollama_model="qwen3-vl:latest",
+        ollama_api="generate",
+    )
+    assert isinstance(provider, OllamaGenerateProvider)
