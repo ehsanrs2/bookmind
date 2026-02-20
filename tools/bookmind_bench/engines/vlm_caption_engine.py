@@ -13,7 +13,7 @@ from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 import requests
 from engines.crop_utils import crop_image
 from engines.layout_engine import list_page_images
-from engines.vlm_providers import build_vlm_provider
+from engines.vlm_providers import EmptyCaptionOutputError, build_vlm_provider
 from PIL import Image
 
 
@@ -244,6 +244,8 @@ def _build_prompt(prompt_template: str, ocr_hints: str) -> str:
 
     base_prompt = (
         "You are captioning a technical diagram or figure. "
+        "Answer with a short caption first (1-2 sentences). "
+        "Then optionally add bullet labels. "
         "Describe the components and labels, connections or flow between them, "
         "the inputs/outputs, the purpose of each block, and any warnings or notes. "
         "Be concise but specific."
@@ -283,6 +285,134 @@ def _fit_prompt_to_limit(
     return best or _build_prompt(prompt_template, "")
 
 
+def _build_retry_prompt() -> str:
+    return (
+        "Return the final answer directly: one short caption (1-2 sentences, max 35 words). "
+        "Then optionally add up to 3 short bullet labels. No preamble."
+    )
+
+
+def _write_caption_debug(
+    *,
+    debug_dir: Path,
+    page: int,
+    job_index: int,
+    attempt_name: str,
+    request_payload: Dict[str, Any],
+    debug_info: Dict[str, Any],
+) -> None:
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    request_path = debug_dir / f"caption_p{page}_idx{job_index}_{attempt_name}_request.json"
+    response_path = debug_dir / f"caption_p{page}_idx{job_index}_{attempt_name}_response.json"
+    request_path.write_text(json.dumps(request_payload, ensure_ascii=True, indent=2), encoding="utf-8")
+    response_path.write_text(json.dumps(debug_info, ensure_ascii=True, indent=2), encoding="utf-8")
+
+
+def _caption_with_retry(
+    *,
+    provider: Any,
+    image_path: str,
+    prompt: str,
+    max_tokens: int,
+    temperature: float,
+    page: int,
+    job_index: int,
+    debug_dir: Path,
+) -> str:
+    request_payload = {
+        "image_path": image_path,
+        "prompt": prompt,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    try:
+        caption, _ = provider.caption(
+            image_path=image_path,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        if not caption.strip():
+            raise EmptyCaptionOutputError(
+                "Caption output is empty after trimming.",
+                debug_info={
+                    "endpoint": None,
+                    "status_code": None,
+                    "timing_ms": None,
+                    "done_reason": None,
+                    "eval_count": None,
+                    "prompt_eval_count": None,
+                    "raw_head_500": "",
+                    "parsed_keys": [],
+                },
+            )
+        return caption
+    except EmptyCaptionOutputError as exc:
+        _write_caption_debug(
+            debug_dir=debug_dir,
+            page=page,
+            job_index=job_index,
+            attempt_name="attempt1",
+            request_payload=request_payload,
+            debug_info=exc.debug_info,
+        )
+
+    retry_prompt = _build_retry_prompt()
+    retry_tokens = max(max_tokens, 2048)
+    retry_temperature = 0.0
+    retry_request = {
+        "image_path": image_path,
+        "prompt": retry_prompt,
+        "max_tokens": retry_tokens,
+        "temperature": retry_temperature,
+    }
+    try:
+        caption, usage = provider.caption(
+            image_path=image_path,
+            prompt=retry_prompt,
+            max_tokens=retry_tokens,
+            temperature=retry_temperature,
+        )
+        if not caption.strip():
+            raise EmptyCaptionOutputError(
+                "Retry caption output is empty after trimming.",
+                debug_info={
+                    "endpoint": None,
+                    "status_code": None,
+                    "timing_ms": None,
+                    "done_reason": None,
+                    "eval_count": None,
+                    "prompt_eval_count": None,
+                    "raw_head_500": "",
+                    "parsed_keys": [],
+                },
+            )
+        retry_debug = {}
+        if isinstance(usage, dict):
+            candidate = usage.get("debug_info")
+            if isinstance(candidate, dict):
+                retry_debug = candidate
+        _write_caption_debug(
+            debug_dir=debug_dir,
+            page=page,
+            job_index=job_index,
+            attempt_name="retry",
+            request_payload=retry_request,
+            debug_info=retry_debug,
+        )
+        return caption
+    except EmptyCaptionOutputError as exc:
+        _write_caption_debug(
+            debug_dir=debug_dir,
+            page=page,
+            job_index=job_index,
+            attempt_name="retry",
+            request_payload=retry_request,
+            debug_info=exc.debug_info,
+        )
+        raise
+
+
 def _resize_crop(path: Path, max_side: int) -> None:
     if max_side <= 0:
         return
@@ -313,6 +443,8 @@ def run_vlm_layout(
     ollama_model: str = DEFAULT_OLLAMA_MODEL,
     ollama_format: str = "text",
     ollama_num_ctx: Optional[int] = None,
+    ollama_api: str = "generate",
+    ollama_think: bool | str | None = False,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     temperature: float = DEFAULT_TEMPERATURE,
     ocr_hint_max_chars: int = DEFAULT_OCR_MAX_CHARS,
@@ -338,12 +470,16 @@ def run_vlm_layout(
         ollama_model=ollama_model,
         ollama_format=ollama_format,
         ollama_num_ctx=ollama_num_ctx,
+        ollama_api=ollama_api,
+        ollama_think=ollama_think,
+        for_caption=True,
     )
     model_name = ollama_model if backend == "ollama" else model
 
     image_map = _resolve_page_image_map(imgdir_path)
     ocr_index = _load_layout_ocr_blocks(layout_path)
     out_path = out_dir_path / "vlm" / "output.jsonl"
+    debug_dir = out_dir_path / "vlm" / "debug"
 
     written = 0
     for line_id, row in _read_jsonl_with_line_ids(layout_path):
@@ -393,11 +529,15 @@ def run_vlm_layout(
         prompt = _fit_prompt_to_limit(prompt_template, ocr_hints, max_prompt_chars=6000)
         start = time.perf_counter()
         try:
-            caption, _ = provider.caption(
+            caption = _caption_with_retry(
+                provider=provider,
                 image_path=str(crop_path),
                 prompt=prompt,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                page=page,
+                job_index=written + 1,
+                debug_dir=debug_dir,
             )
         except urllib.error.HTTPError as exc:
             body = ""
@@ -467,6 +607,8 @@ def run_vlm_caption_jobs(
     ollama_model: str = DEFAULT_OLLAMA_MODEL,
     ollama_format: str = "text",
     ollama_num_ctx: Optional[int] = None,
+    ollama_api: str = "generate",
+    ollama_think: bool | str | None = False,
     paddleocr_jsonl: Optional[str] = None,
     use_ocr_hints: bool = True,
     max_tokens: int = DEFAULT_MAX_TOKENS,
@@ -490,10 +632,14 @@ def run_vlm_caption_jobs(
         ollama_model=ollama_model,
         ollama_format=ollama_format,
         ollama_num_ctx=ollama_num_ctx,
+        ollama_api=ollama_api,
+        ollama_think=ollama_think,
+        for_caption=True,
     )
     model_name = ollama_model if backend == "ollama" else model
 
     ocr_index = _load_ocr_blocks(Path(paddleocr_jsonl)) if paddleocr_jsonl else {}
+    debug_dir = out_dir_path / "vlm" / "debug"
 
     written = 0
     for idx, job in enumerate(_read_jobs(jobs_path), start=1):
@@ -522,11 +668,15 @@ def run_vlm_caption_jobs(
 
         start = time.perf_counter()
         try:
-            caption, _ = provider.caption(
+            caption = _caption_with_retry(
+                provider=provider,
                 image_path=str(crop_path),
                 prompt=prompt,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                page=page,
+                job_index=idx,
+                debug_dir=debug_dir,
             )
         except urllib.error.HTTPError as exc:
             body = ""

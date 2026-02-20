@@ -316,6 +316,8 @@ def _cmd_vlm(args: argparse.Namespace) -> int:
         ollama_model=args.ollama_model,
         ollama_format=args.ollama_format,
         ollama_num_ctx=args.ollama_num_ctx,
+        ollama_api=args.ollama_api,
+        ollama_think=args.ollama_think,
         paddleocr_jsonl=str(paddleocr_path) if paddleocr_path else None,
         use_ocr_hints=args.use_ocr_hints,
         max_tokens=args.max_tokens,
@@ -366,6 +368,8 @@ def _cmd_vlm_layout(args: argparse.Namespace) -> int:
         ollama_model=args.ollama_model,
         ollama_format=args.ollama_format,
         ollama_num_ctx=args.ollama_num_ctx,
+        ollama_api=args.ollama_api,
+        ollama_think=args.ollama_think,
         max_tokens=args.max_tokens,
         temperature=args.temperature,
         ocr_hint_max_chars=args.ocr_hint_max_chars,
@@ -859,6 +863,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ollama response format for --backend ollama (default text)",
     )
     vlm.add_argument(
+        "--ollama_api",
+        choices=["chat", "generate"],
+        default="generate",
+        help="Ollama API for --backend ollama (default generate)",
+    )
+    vlm.add_argument(
+        "--ollama_think",
+        type=_parse_ollama_think_arg,
+        default=False,
+        help=(
+            "Ollama top-level think mode for --backend ollama "
+            "(true|false|high|medium|low, default false)"
+        ),
+    )
+    vlm.add_argument(
         "--ollama_num_ctx",
         type=int,
         required=False,
@@ -931,6 +950,21 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["text", "json"],
         default="text",
         help="Ollama response format for --backend ollama (default text)",
+    )
+    vlm_layout.add_argument(
+        "--ollama_api",
+        choices=["chat", "generate"],
+        default="generate",
+        help="Ollama API for --backend ollama (default generate)",
+    )
+    vlm_layout.add_argument(
+        "--ollama_think",
+        type=_parse_ollama_think_arg,
+        default=False,
+        help=(
+            "Ollama top-level think mode for --backend ollama "
+            "(true|false|high|medium|low, default false)"
+        ),
     )
     vlm_layout.add_argument(
         "--ollama_num_ctx",

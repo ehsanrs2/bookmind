@@ -1,4 +1,5 @@
 import run
+from engines import vlm_caption_engine
 
 
 def test_vlm_args_accept_max_tokens_and_temperature():
@@ -36,6 +37,8 @@ def test_vlm_args_parse_backend_and_ollama_defaults():
     assert args.backend == "ollama"
     assert args.ollama_url == "http://127.0.0.1:11434"
     assert args.ollama_model == "qwen3-vl:latest"
+    assert args.ollama_api == "generate"
+    assert args.ollama_think is False
     assert args.ollama_format == "text"
     assert args.ollama_num_ctx is None
 
@@ -50,7 +53,7 @@ def test_cmd_vlm_routes_backend_to_engine(tmp_path, monkeypatch):
         captured.update(kwargs)
         return 0
 
-    monkeypatch.setattr(run, "run_vlm_caption_jobs", _fake_run_vlm_caption_jobs)
+    monkeypatch.setattr(vlm_caption_engine, "run_vlm_caption_jobs", _fake_run_vlm_caption_jobs)
 
     parser = run.build_parser()
     args = parser.parse_args(
@@ -78,6 +81,8 @@ def test_cmd_vlm_routes_backend_to_engine(tmp_path, monkeypatch):
     assert captured["backend"] == "ollama"
     assert captured["ollama_url"] == "http://127.0.0.1:11434"
     assert captured["ollama_model"] == "qwen3-vl:latest"
+    assert captured["ollama_api"] == "generate"
+    assert captured["ollama_think"] is False
     assert captured["ollama_format"] == "text"
     assert captured["ollama_num_ctx"] is None
 
@@ -94,7 +99,7 @@ def test_cmd_vlm_layout_routes_backend_to_engine(tmp_path, monkeypatch):
         captured.update(kwargs)
         return 0
 
-    monkeypatch.setattr(run, "run_vlm_layout", _fake_run_vlm_layout)
+    monkeypatch.setattr(vlm_caption_engine, "run_vlm_layout", _fake_run_vlm_layout)
 
     parser = run.build_parser()
     args = parser.parse_args(
@@ -120,3 +125,5 @@ def test_cmd_vlm_layout_routes_backend_to_engine(tmp_path, monkeypatch):
     assert captured["backend"] == "vllm"
     assert captured["endpoint"] == "http://127.0.0.1:8000/v1"
     assert captured["model"] == "qwen3-vl"
+    assert captured["ollama_api"] == "generate"
+    assert captured["ollama_think"] is False

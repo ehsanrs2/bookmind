@@ -47,6 +47,14 @@ class VLMProvider(ABC):
         """Return generated caption text and optional usage metadata."""
 
 
+class EmptyCaptionOutputError(RuntimeError):
+    """Raised when caption generation returns empty final content."""
+
+    def __init__(self, message: str, debug_info: Dict[str, Any]) -> None:
+        super().__init__(message)
+        self.debug_info = debug_info
+
+
 def _encode_image_base64(image_path: Path) -> str:
     return base64.b64encode(image_path.read_bytes()).decode("ascii")
 
@@ -292,12 +300,19 @@ class OllamaProvider(VLMProvider):
         timeout_s: int = 60,
         ollama_format: str = "text",
         ollama_num_ctx: Optional[int] = None,
+        ollama_api: str = "chat",
+        ollama_think: bool | str | None = False,
     ) -> None:
         self.ollama_url = ollama_url.rstrip("/")
         self.model = model
         self.timeout_s = timeout_s
         self.ollama_format = ollama_format.strip().lower() if ollama_format else "text"
         self.ollama_num_ctx = ollama_num_ctx
+        api_norm = str(ollama_api or "chat").strip().lower()
+        if api_norm not in {"chat", "generate"}:
+            raise ValueError(f"Unsupported Ollama API for captions: {ollama_api}")
+        self.ollama_api = api_norm
+        self.ollama_think = None if ollama_think is None else parse_ollama_think(ollama_think)
 
     def caption(
         self,
@@ -314,36 +329,67 @@ class OllamaProvider(VLMProvider):
         if isinstance(self.ollama_num_ctx, int) and self.ollama_num_ctx > 0:
             options["num_ctx"] = int(self.ollama_num_ctx)
 
-        payload: Dict[str, Any] = {
-            "model": self.model,
-            "messages": [{"role": "user", "content": prompt, "images": [image_b64]}],
-            "stream": False,
-            "options": options,
-        }
+        payload: Dict[str, Any]
+        endpoint_suffix: str
+        parser = parse_ollama_chat_payload
+        if self.ollama_api == "generate":
+            endpoint_suffix = "/api/generate"
+            parser = parse_ollama_generate_payload
+            payload = {
+                "model": self.model,
+                "prompt": prompt,
+                "images": [image_b64],
+                "stream": False,
+                "options": options,
+            }
+        else:
+            endpoint_suffix = "/api/chat"
+            payload = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": prompt, "images": [image_b64]}],
+                "stream": False,
+                "options": options,
+            }
+        if self.ollama_think is not None:
+            payload["think"] = self.ollama_think
         if self.ollama_format == "json":
             payload["format"] = "json"
         start = time.perf_counter()
-        response = requests.post(
-            self.ollama_url + "/api/chat",
-            json=payload,
-            timeout=self.timeout_s,
-        )
+        response = requests.post(self.ollama_url + endpoint_suffix, json=payload, timeout=self.timeout_s)
         elapsed_ms = int(round((time.perf_counter() - start) * 1000))
         response.raise_for_status()
-        parsed = response.json()
-        parsed_content = parse_ollama_chat_payload(parsed)
-        content = parsed_content.get("answer_text")
-        if content is None:
-            keys = parsed_content.get("parsed_keys")
-            reason = parsed_content.get("done_reason")
+        parsed: Any
+        try:
+            parsed = response.json()
+        except Exception:
+            parsed = response.text
+        parsed_content = parser(parsed)
+        content_raw = parsed_content.get("answer_text")
+        content = content_raw.strip() if isinstance(content_raw, str) else ""
+        response_text = getattr(response, "text", None)
+        raw_text = response_text if isinstance(response_text, str) else json.dumps(parsed, ensure_ascii=True)
+        debug_info = {
+            "endpoint": endpoint_suffix,
+            "status_code": getattr(response, "status_code", None),
+            "timing_ms": elapsed_ms,
+            "done_reason": parsed_content.get("done_reason"),
+            "eval_count": parsed.get("eval_count") if isinstance(parsed, dict) else None,
+            "prompt_eval_count": parsed.get("prompt_eval_count") if isinstance(parsed, dict) else None,
+            "raw_head_500": raw_text[:500],
+            "parsed_keys": parsed_content.get("parsed_keys"),
+            "response_keys": sorted(parsed.keys()) if isinstance(parsed, dict) else [],
+        }
+        if not content:
             provider_error = parsed_content.get("error")
-            raise ValueError(
-                "Ollama response missing assistant content "
-                "(expected message.content or response). "
-                f"response_keys={keys} done_reason={reason} error={provider_error}"
+            raise EmptyCaptionOutputError(
+                "Ollama response contained empty final output "
+                f"(api={self.ollama_api} done_reason={debug_info['done_reason']} error={provider_error})",
+                debug_info=debug_info,
             )
         usage = extract_ollama_usage(parsed, timing_ms=elapsed_ms)
-        return content.strip(), usage
+        usage["ollama_api"] = self.ollama_api
+        usage["debug_info"] = debug_info
+        return content, usage
 
 
 class OllamaGenerateProvider:
@@ -373,10 +419,22 @@ def build_vlm_provider(
     ollama_format: str = "text",
     ollama_num_ctx: Optional[int] = None,
     ollama_api: str = "chat",
+    ollama_think: bool | str | None = False,
+    for_caption: bool = False,
 ) -> Any:
     backend_norm = backend.strip().lower()
     if backend_norm == "ollama":
         ollama_api_norm = str(ollama_api or "chat").strip().lower()
+        if for_caption:
+            return OllamaProvider(
+                ollama_url=ollama_url,
+                model=ollama_model,
+                timeout_s=timeout_s,
+                ollama_format=ollama_format,
+                ollama_num_ctx=ollama_num_ctx,
+                ollama_api=ollama_api_norm,
+                ollama_think=ollama_think,
+            )
         if ollama_api_norm == "generate":
             return OllamaGenerateProvider(
                 ollama_url=ollama_url,
@@ -390,6 +448,8 @@ def build_vlm_provider(
             timeout_s=timeout_s,
             ollama_format=ollama_format,
             ollama_num_ctx=ollama_num_ctx,
+            ollama_api="chat",
+            ollama_think=ollama_think,
         )
     if backend_norm == "vllm":
         return OpenAICompatProvider(endpoint=endpoint, model=model, timeout_s=timeout_s)

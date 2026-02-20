@@ -6,6 +6,7 @@ from pathlib import Path
 import requests
 
 from engines.vlm_providers import (
+    EmptyCaptionOutputError,
     OllamaGenerateProvider,
     OllamaProvider,
     OpenAICompatProvider,
@@ -120,6 +121,125 @@ def test_ollama_provider_caption_response_fallback(monkeypatch, tmp_path: Path) 
     assert text == "ollama caption fallback"
     assert usage is not None
     assert usage["eval_count"] == 2
+
+
+def test_ollama_provider_caption_generate_api_parses_response(monkeypatch, tmp_path: Path) -> None:
+    image = tmp_path / "crop.png"
+    image.write_bytes(b"png-bytes")
+
+    class _FakeResponse:
+        status_code = 200
+        text = '{"response":"generated caption"}'
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {"response": "generated caption", "eval_count": 7}
+
+    def _fake_post(url, json=None, timeout=60):
+        assert url == "http://127.0.0.1:11434/api/generate"
+        assert json is not None
+        assert json["images"]
+        return _FakeResponse()
+
+    monkeypatch.setattr(requests, "post", _fake_post)
+
+    provider = OllamaProvider(
+        ollama_url="http://127.0.0.1:11434",
+        model="qwen3-vl:latest",
+        ollama_api="generate",
+        ollama_think=False,
+    )
+    text, usage = provider.caption(
+        image_path=str(image),
+        prompt="Describe this figure",
+        max_tokens=64,
+        temperature=0.1,
+    )
+    assert text == "generated caption"
+    assert usage is not None
+    assert usage["eval_count"] == 7
+    assert usage["ollama_api"] == "generate"
+
+
+def test_ollama_provider_caption_chat_api_parses_message_content(monkeypatch, tmp_path: Path) -> None:
+    image = tmp_path / "crop.png"
+    image.write_bytes(b"png-bytes")
+
+    class _FakeResponse:
+        status_code = 200
+        text = '{"message":{"content":"chat caption","thinking":"x"}}'
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {"message": {"content": "chat caption", "thinking": "x"}, "eval_count": 11}
+
+    def _fake_post(url, json=None, timeout=60):
+        assert url == "http://127.0.0.1:11434/api/chat"
+        return _FakeResponse()
+
+    monkeypatch.setattr(requests, "post", _fake_post)
+
+    provider = OllamaProvider(
+        ollama_url="http://127.0.0.1:11434",
+        model="qwen3-vl:latest",
+        ollama_api="chat",
+    )
+    text, usage = provider.caption(
+        image_path=str(image),
+        prompt="Describe this figure",
+        max_tokens=64,
+        temperature=0.1,
+    )
+    assert text == "chat caption"
+    assert usage is not None
+    assert usage["ollama_api"] == "chat"
+
+
+def test_ollama_provider_caption_empty_final_raises(monkeypatch, tmp_path: Path) -> None:
+    image = tmp_path / "crop.png"
+    image.write_bytes(b"png-bytes")
+
+    class _FakeResponse:
+        status_code = 200
+
+        @property
+        def text(self):
+            return json.dumps(self.json())
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {
+                "message": {"content": "", "thinking": "long reasoning"},
+                "done_reason": "length",
+                "eval_count": 256,
+                "prompt_eval_count": 128,
+            }
+
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: _FakeResponse())
+    provider = OllamaProvider(
+        ollama_url="http://127.0.0.1:11434",
+        model="qwen3-vl:latest",
+        ollama_api="chat",
+    )
+    try:
+        provider.caption(
+            image_path=str(image),
+            prompt="Describe this figure",
+            max_tokens=64,
+            temperature=0.1,
+        )
+        raise AssertionError("Expected EmptyCaptionOutputError")
+    except EmptyCaptionOutputError as exc:
+        assert "empty final output" in str(exc)
+        assert exc.debug_info["done_reason"] == "length"
+        assert exc.debug_info["eval_count"] == 256
+        assert "message" in exc.debug_info["response_keys"]
 
 
 def test_provider_factory_backend_switch() -> None:
