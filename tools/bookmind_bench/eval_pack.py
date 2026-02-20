@@ -258,7 +258,7 @@ def run_eval(
             messages = build_rag_messages(
                 query_text,
                 context_text,
-                require_json_response=backend_name == "ollama",
+                require_json_response=False,
             )
 
             progress_reporter.phase(query_id, "generate")
@@ -275,6 +275,8 @@ def run_eval(
                     temperature=float(gen_cfg.get("temperature", 0.2)),
                     ollama_num_predict=int(gen_cfg.get("ollama_num_predict", 1536)),
                     ollama_retry_num_predict=int(gen_cfg.get("ollama_retry_num_predict", 2048)),
+                    max_context_chars=int(gen_cfg.get("max_context_chars", max_context_chars)),
+                    ollama_num_predict_auto=bool(gen_cfg.get("ollama_num_predict_auto", True)),
                     ollama_think=gen_cfg.get("ollama_think", False),
                     fallback_citations=citations,
                     ollama_debug_hook=hook,
@@ -376,7 +378,11 @@ def run_eval(
             }
             rows.append(row)
             _write_json(items_dir / f"{query_id}.json", row)
-            answer_file_text = answer_text if answer_text else "(empty answer)"
+            answer_file_text = (
+                answer_text
+                if answer_text
+                else f"GENERATION_FAILED: {failure_reason or 'Unknown generation failure'}"
+            )
             (per_query_dir / f"{per_query_prefix}_answer.txt").write_text(
                 answer_file_text + "\n",
                 encoding="utf-8",
@@ -433,8 +439,13 @@ def run_eval(
             "generation": {
                 "max_tokens": int(gen_cfg.get("max_tokens", 512)),
                 "temperature": float(gen_cfg.get("temperature", 0.2)),
+                "ollama_api": str(
+                    gen_cfg.get("ollama_api") or backend_cfg.get("ollama_api") or "generate"
+                ),
                 "ollama_num_predict": int(gen_cfg.get("ollama_num_predict", 1536)),
                 "ollama_retry_num_predict": int(gen_cfg.get("ollama_retry_num_predict", 2048)),
+                "ollama_num_predict_auto": bool(gen_cfg.get("ollama_num_predict_auto", True)),
+                "max_context_chars": int(gen_cfg.get("max_context_chars", max_context_chars)),
                 "ollama_think": gen_cfg.get("ollama_think", False),
             },
         },

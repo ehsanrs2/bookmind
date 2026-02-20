@@ -74,6 +74,27 @@ def _parse_ollama_think_arg(value: object) -> bool | str:
         raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
+def _resolve_ollama_num_predict_cfg(
+    *,
+    backend: str,
+    max_context_chars: int,
+    ollama_num_predict: int,
+    ollama_retry_num_predict: int,
+    ollama_num_predict_auto: bool,
+) -> tuple[int, int]:
+    first = int(ollama_num_predict)
+    retry = int(ollama_retry_num_predict)
+    if str(backend).strip().lower() != "ollama":
+        return first, retry
+    if not bool(ollama_num_predict_auto):
+        return first, retry
+    if int(max_context_chars) < 7000:
+        return first, retry
+    tuned_first = min(max(first, 2048), 4096)
+    tuned_retry = min(max(retry, 3072), 4096)
+    return tuned_first, tuned_retry
+
+
 def _cmd_render(args: argparse.Namespace) -> int:
     from render_pdf import parse_pages, render_pdf_pages
 
@@ -548,7 +569,7 @@ def _cmd_rag_preview(args: argparse.Namespace) -> int:
     context_payload = build_context(results, max_chars=args.max_context_chars)
     context_text = str(context_payload.get("context_text") or "")
     citations = context_payload.get("citations") if isinstance(context_payload.get("citations"), list) else []
-    require_json_response = args.backend == "ollama"
+    require_json_response = False
     messages = build_rag_messages(
         args.query,
         context_text,
@@ -564,6 +585,13 @@ def _cmd_rag_preview(args: argparse.Namespace) -> int:
         ollama_num_ctx=args.ollama_num_ctx,
         ollama_api=args.ollama_api,
     )
+    tuned_num_predict, tuned_retry_num_predict = _resolve_ollama_num_predict_cfg(
+        backend=args.backend,
+        max_context_chars=args.max_context_chars,
+        ollama_num_predict=args.ollama_num_predict,
+        ollama_retry_num_predict=args.ollama_retry_num_predict,
+        ollama_num_predict_auto=args.ollama_num_predict_auto,
+    )
     ollama_attempts = []
     debug_hook = ollama_attempts.append if args.backend == "ollama" else None
     try:
@@ -572,8 +600,10 @@ def _cmd_rag_preview(args: argparse.Namespace) -> int:
             messages=messages,
             max_tokens=args.max_tokens,
             temperature=args.temperature,
-            ollama_num_predict=args.ollama_num_predict,
-            ollama_retry_num_predict=args.ollama_retry_num_predict,
+            ollama_num_predict=tuned_num_predict,
+            ollama_retry_num_predict=tuned_retry_num_predict,
+            max_context_chars=args.max_context_chars,
+            ollama_num_predict_auto=args.ollama_num_predict_auto,
             ollama_think=args.ollama_think,
             fallback_citations=citations,
             ollama_debug_hook=debug_hook,
@@ -624,11 +654,21 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         "hf_retries": args.hf_retries,
         "timeout_s": args.timeout_s,
     }
+    tuned_num_predict, tuned_retry_num_predict = _resolve_ollama_num_predict_cfg(
+        backend=args.backend,
+        max_context_chars=args.max_context_chars,
+        ollama_num_predict=args.ollama_num_predict,
+        ollama_retry_num_predict=args.ollama_retry_num_predict,
+        ollama_num_predict_auto=args.ollama_num_predict_auto,
+    )
     gen_cfg = {
         "max_tokens": args.max_tokens,
         "temperature": args.temperature,
-        "ollama_num_predict": args.ollama_num_predict,
-        "ollama_retry_num_predict": args.ollama_retry_num_predict,
+        "ollama_num_predict": tuned_num_predict,
+        "ollama_retry_num_predict": tuned_retry_num_predict,
+        "ollama_num_predict_auto": args.ollama_num_predict_auto,
+        "ollama_api": args.ollama_api,
+        "max_context_chars": args.max_context_chars,
         "ollama_think": args.ollama_think,
     }
 
@@ -1331,6 +1371,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ollama options.num_predict for retry attempt (default 2048)",
     )
     rag_preview.add_argument(
+        "--ollama_num_predict_auto",
+        default=True,
+        type=_parse_bool,
+        help=(
+            "Auto-tune Ollama num_predict for large contexts (>=7000 chars): "
+            "first>=2048, retry>=3072, cap 4096 (default true)"
+        ),
+    )
+    rag_preview.add_argument(
         "--ollama_think",
         type=_parse_ollama_think_arg,
         choices=[False, True, "high", "medium", "low"],
@@ -1494,6 +1543,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=2048,
         help="Ollama options.num_predict for retry attempt (default 2048)",
+    )
+    eval_cmd.add_argument(
+        "--ollama_num_predict_auto",
+        default=True,
+        type=_parse_bool,
+        help=(
+            "Auto-tune Ollama num_predict for large contexts (>=7000 chars): "
+            "first>=2048, retry>=3072, cap 4096 (default true)"
+        ),
     )
     eval_cmd.add_argument(
         "--ollama_think",

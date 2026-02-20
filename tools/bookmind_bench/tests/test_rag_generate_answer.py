@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 
 import requests
+import pytest
 
 from engines.vlm_providers import OllamaProvider, OpenAICompatProvider
 from rag_preview import generate_answer
@@ -169,7 +171,7 @@ def test_generate_answer_ollama_json_content_extracts_answer(monkeypatch) -> Non
     assert usage["attempt_index"] == 0
 
 
-def test_generate_answer_ollama_malformed_json_raises(monkeypatch) -> None:
+def test_generate_answer_ollama_malformed_json_falls_back_to_plain_text(monkeypatch) -> None:
     class _FakeResponse:
         def __init__(self):
             self.status_code = 200
@@ -196,15 +198,17 @@ def test_generate_answer_ollama_malformed_json_raises(monkeypatch) -> None:
         ollama_format="json",
     )
     try:
-        generate_answer(
+        text, usage = generate_answer(
             provider=provider,
             messages=[{"role": "user", "content": "Q"}],
             ollama_debug_hook=attempts.append,
         )
-        raise AssertionError("Expected RuntimeError for malformed Ollama JSON content")
     except RuntimeError as exc:
-        assert "failed after retry" in str(exc)
-    assert len(attempts) == 2
+        raise AssertionError(f"Unexpected RuntimeError: {exc}") from exc
+    assert text == '{"answer": 123, "citations": []}'
+    assert usage is not None
+    assert usage["attempt_index"] == 0
+    assert len(attempts) == 1
     assert attempts[0]["http_status"] == 200
     assert attempts[0]["response_headers"]["content-type"] == "application/json"
 
@@ -326,6 +330,85 @@ def test_generate_answer_ollama_uses_custom_num_predict_values(monkeypatch) -> N
     assert attempts[1]["request"]["options"]["num_predict"] >= 1337
 
 
+def test_generate_answer_ollama_autotunes_num_predict_for_large_context(monkeypatch) -> None:
+    class _FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+            self.status_code = 200
+            self.headers = {"Content-Type": "application/json"}
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return self._payload
+
+    payloads = [
+        {"message": {"content": "", "thinking": "retry me"}, "eval_count": 100, "done_reason": "length"},
+        {"message": {"content": '{"answer":"ok","citations":[]}'}, "eval_count": 42},
+    ]
+    calls = {"count": 0}
+
+    def _fake_post(url, json=None, timeout=60):
+        idx = calls["count"]
+        calls["count"] += 1
+        return _FakeResponse(payloads[idx])
+
+    monkeypatch.setattr(requests, "post", _fake_post)
+    attempts = []
+    provider = OllamaProvider(
+        ollama_url="http://127.0.0.1:11434",
+        model="qwen3-vl:latest",
+        ollama_format="text",
+    )
+    text, usage = generate_answer(
+        provider=provider,
+        messages=[{"role": "system", "content": "s"}, {"role": "user", "content": "Q"}],
+        max_context_chars=7000,
+        ollama_debug_hook=attempts.append,
+    )
+    assert text == "ok"
+    assert usage is not None
+    assert calls["count"] == 2
+    assert attempts[0]["request"]["options"]["num_predict"] == 2048
+    assert attempts[1]["request"]["options"]["num_predict"] == 3072
+
+
+def test_generate_answer_ollama_plain_text_is_accepted(monkeypatch) -> None:
+    class _FakeResponse:
+        def __init__(self):
+            self.status_code = 200
+            self.headers = {"Content-Type": "application/json"}
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {
+                "message": {"content": "This is a short final answer [1:s1]."},
+                "prompt_eval_count": 5,
+                "eval_count": 7,
+            }
+
+    def _fake_post(url, json=None, timeout=60):
+        return _FakeResponse()
+
+    monkeypatch.setattr(requests, "post", _fake_post)
+    provider = OllamaProvider(
+        ollama_url="http://127.0.0.1:11434",
+        model="qwen3-vl:latest",
+        ollama_format="text",
+    )
+    text, usage = generate_answer(
+        provider=provider,
+        messages=[{"role": "user", "content": "Q"}],
+    )
+
+    assert text == "This is a short final answer [1:s1]."
+    assert usage is not None
+    assert usage["attempt_index"] == 0
+
+
 def test_generate_answer_ollama_accepts_string_think_level(monkeypatch) -> None:
     class _FakeResponse:
         def __init__(self):
@@ -365,7 +448,7 @@ def test_generate_answer_ollama_accepts_string_think_level(monkeypatch) -> None:
     assert captured["payload"]["think"] == "high"
 
 
-def test_generate_answer_ollama_extractor_recovers_when_retry_empty_with_thinking(monkeypatch) -> None:
+def test_generate_answer_ollama_retry_prompt_uses_short_final_answer_first(monkeypatch) -> None:
     class _FakeResponse:
         def __init__(self, payload):
             self.status_code = 200
@@ -379,25 +462,8 @@ def test_generate_answer_ollama_extractor_recovers_when_retry_empty_with_thinkin
             return self._payload
 
     payloads = [
-        {
-            "message": {"content": " \n\t", "thinking": "thinking attempt 1"},
-            "eval_count": 512,
-            "prompt_eval_count": 33,
-            "done_reason": "length",
-        },
-        {
-            "message": {"content": " \n\t", "thinking": "thinking attempt 2"},
-            "eval_count": 512,
-            "prompt_eval_count": 44,
-            "done_reason": "length",
-        },
-        {
-            "message": {
-                "content": '{"answer":"final recovered answer","citations":[{"page":3,"stable_id":"sid-3"}]}'
-            },
-            "eval_count": 120,
-            "prompt_eval_count": 21,
-        },
+        {"message": {"content": " \n\t", "thinking": "thinking attempt 1"}, "eval_count": 512, "prompt_eval_count": 33, "done_reason": "length"},
+        {"message": {"content": '{"answer":"final recovered answer","citations":[{"page":3,"stable_id":"sid-3"}]}'}, "eval_count": 120, "prompt_eval_count": 21},
     ]
     calls = {"count": 0}
 
@@ -415,7 +481,10 @@ def test_generate_answer_ollama_extractor_recovers_when_retry_empty_with_thinkin
     )
     text, usage = generate_answer(
         provider=provider,
-        messages=[{"role": "system", "content": "s"}, {"role": "user", "content": "Q"}],
+        messages=[
+            {"role": "system", "content": "s"},
+            {"role": "user", "content": "User query:\nQ\n\nRetrieved context:\n```\nctx\n```\n"},
+        ],
         ollama_think=True,
         ollama_debug_hook=attempts.append,
     )
@@ -423,16 +492,16 @@ def test_generate_answer_ollama_extractor_recovers_when_retry_empty_with_thinkin
     assert "thinking attempt 1" not in text
     assert "thinking attempt 2" not in text
     assert usage is not None
-    assert usage["attempt_name"] == "ultra_short_json"
-    assert calls["count"] == 3
-    assert len(attempts) == 3
+    assert usage["attempt_name"] == "retry_length_boost"
+    assert calls["count"] == 2
+    assert len(attempts) == 2
     assert attempts[0]["request"]["think"] is True
     assert attempts[1]["request"]["think"] is True
-    assert attempts[2]["request"]["think"] is True
     assert attempts[0]["request"]["options"]["num_predict"] == 1536
     assert attempts[1]["request"]["options"]["num_predict"] >= 2048
-    assert attempts[2]["request"]["options"]["num_predict"] >= 1024
-    assert attempts[2]["request"]["options"]["temperature"] == 0.0
+    assert attempts[1]["request"]["options"]["temperature"] == 0.0
+    retry_user_message = attempts[1]["request"]["messages"][1]["content"]
+    assert "First output FINAL ANSWER in 1-3 concise sentences." in retry_user_message
 
 
 def test_generate_answer_ollama_retries_exhausted_raises_without_thinking(monkeypatch) -> None:
@@ -476,7 +545,7 @@ def test_generate_answer_ollama_retries_exhausted_raises_without_thinking(monkey
         assert "eval_count=512" in str(exc)
         assert "prompt_eval_count=33" in str(exc)
         assert "raw_head_500=" in str(exc)
-    assert calls["count"] == 3
+    assert calls["count"] == 2
 
 
 def test_generate_answer_ollama_empty_content_with_thinking_raises_with_raw_excerpt(
@@ -525,7 +594,7 @@ def test_generate_answer_ollama_empty_content_with_thinking_raises_with_raw_exce
         assert "eval_count=1536" in err
         assert "prompt_eval_count=128" in err
         assert "raw_head_500=" in err
-    assert calls["count"] == 3
+    assert calls["count"] == 2
 
 
 def test_generate_answer_ollama_error_payload_retries_then_raises(monkeypatch) -> None:
@@ -599,3 +668,27 @@ def test_generate_answer_ollama_extracts_json_with_leading_trailing_junk(monkeyp
     assert text == "final answer"
     assert usage is not None
     assert usage["attempt_index"] == 0
+
+
+@pytest.mark.skipif(
+    os.environ.get("BOOKMIND_OLLAMA_INTEGRATION") != "1",
+    reason="Set BOOKMIND_OLLAMA_INTEGRATION=1 to run live Ollama integration test",
+)
+def test_generate_answer_ollama_integration_live_roundtrip() -> None:
+    provider = OllamaProvider(
+        ollama_url=os.environ.get("BOOKMIND_OLLAMA_URL", "http://127.0.0.1:11434"),
+        model=os.environ.get("BOOKMIND_OLLAMA_MODEL", "qwen3-vl:latest"),
+        ollama_format="text",
+    )
+    text, usage = generate_answer(
+        provider=provider,
+        messages=[
+            {
+                "role": "user",
+                "content": "User query:\nSay hello.\n\nRetrieved context:\n```\nHello context\n```\n",
+            }
+        ],
+    )
+    assert isinstance(text, str)
+    assert text.strip()
+    assert usage is None or isinstance(usage, dict)

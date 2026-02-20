@@ -128,6 +128,9 @@ def test_run_eval_writes_debug_artifact_for_empty_answer(tmp_path: Path, monkeyp
 
     assert results["queries"][0]["answer_text"] == ""
     assert results["queries"][0]["status"] == "failed"
+    answer_text_path = tmp_path / "per_query" / "q01_answer.txt"
+    assert answer_text_path.exists()
+    assert answer_text_path.read_text(encoding="utf-8").startswith("GENERATION_FAILED:")
     debug_path = tmp_path / "per_query" / "q01_raw_provider.json"
     assert debug_path.exists()
     debug_payload = json.loads(debug_path.read_text(encoding="utf-8"))
@@ -157,6 +160,7 @@ def test_run_eval_generation_exception_includes_debug_artifact(tmp_path: Path, m
         output_dir=tmp_path,
     )
     assert results["queries"][0]["status"] == "failed"
+    assert results["queries"][0]["failure_reason"] == "bad provider payload"
     assert results["summary"]["failed_queries"] == 1
 
     debug_path = tmp_path / "per_query" / "q01_raw_provider.json"
@@ -164,6 +168,50 @@ def test_run_eval_generation_exception_includes_debug_artifact(tmp_path: Path, m
     debug_payload = json.loads(debug_path.read_text(encoding="utf-8"))
     assert debug_payload["issue"] == "generation_exception"
     assert debug_payload["error_type"] == "ValueError"
+
+    answer_text_path = tmp_path / "per_query" / "q01_answer.txt"
+    assert answer_text_path.exists()
+    answer_line = answer_text_path.read_text(encoding="utf-8").strip()
+    assert answer_line == "GENERATION_FAILED: bad provider payload"
+
+
+def test_write_reports_report_json_includes_generation_cfg(tmp_path: Path) -> None:
+    results = {
+        "config": {
+            "qdrant_url": "http://127.0.0.1:6333",
+            "collection": "bookmind_bench",
+            "backend": {"backend": "ollama"},
+            "retrieval": {"top_k": 8},
+            "generation": {
+                "ollama_api": "generate",
+                "ollama_num_predict": 2048,
+                "ollama_retry_num_predict": 3072,
+                "ollama_num_predict_auto": True,
+                "max_context_chars": 7000,
+            },
+        },
+        "summary": {"count_queries": 1, "failed_queries": 1},
+        "queries": [
+            {
+                "id": "q1",
+                "answer_text": "",
+                "status": "failed",
+                "failure_reason": "x",
+                "timings": {"total_ms": 1},
+                "citation_count": 0,
+                "citation_rate": 0.0,
+            }
+        ],
+    }
+    eval_pack.write_reports(results, tmp_path)
+    report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    generation = report["config"]["generation"]
+    assert generation["ollama_api"] == "generate"
+    assert generation["ollama_num_predict"] == 2048
+    assert generation["ollama_retry_num_predict"] == 3072
+    assert report["summary"]["failed_queries"] == 1
+    assert report["queries"][0]["status"] == "failed"
+    assert report["queries"][0]["failure_reason"] == "x"
 
 
 def test_run_eval_writes_ollama_attempt_artifacts_on_failure(tmp_path: Path, monkeypatch) -> None:
@@ -182,6 +230,8 @@ def test_run_eval_writes_ollama_attempt_artifacts_on_failure(tmp_path: Path, mon
         temperature,
         ollama_num_predict=1536,
         ollama_retry_num_predict=2048,
+        max_context_chars=6000,
+        ollama_num_predict_auto=True,
         ollama_think=False,
         fallback_citations=None,
         ollama_debug_hook=None,

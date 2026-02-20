@@ -120,11 +120,12 @@ def _rag_user_instructions_json() -> str:
         "Instructions:\n"
         "- Answer using only the provided context.\n"
         "- If the context is insufficient, explicitly say context is insufficient.\n"
-        "- Return a SINGLE JSON object in the assistant final message content:\n"
+        "- First output a short final answer in 1-3 sentences.\n"
+        "- Then optionally provide brief bullet details.\n"
+        "- Include citations inline as [page:stable_id], or include citations in JSON when used.\n"
+        "- If returning JSON, return a SINGLE JSON object in the assistant final message content:\n"
         '{"answer":"...","citations":[{"page":1,"stable_id":"..."}]}\n'
         "- No extra keys.\n"
-        "- No markdown.\n"
-        "- No prose outside JSON.\n"
         "- Keep answer concise.\n"
         "- citations may be an empty list."
     )
@@ -135,6 +136,8 @@ def _rag_user_instructions_text() -> str:
         "Instructions:\n"
         "- Answer using only the provided context.\n"
         "- If the context is insufficient, explicitly say the context is insufficient.\n"
+        "- First output a short final answer in 1-3 sentences.\n"
+        "- Then optionally provide brief bullet details.\n"
         "- Include citations in the form [page:stable_id]."
     )
 
@@ -413,8 +416,10 @@ def _build_final_answer_first_messages(
         f"{query}\n\n"
         "Context:\n"
         f"{short_context}\n\n"
-        "Return FINAL ANSWER only in 1-2 concise sentences.\n"
-        "No chain-of-thought. No markdown."
+        "First output FINAL ANSWER in 1-3 concise sentences.\n"
+        "Then optionally include 1-3 brief bullet details.\n"
+        "Include citations as [page:stable_id] when possible.\n"
+        "No chain-of-thought."
     )
     return [
         {
@@ -429,10 +434,29 @@ def _normalize_ollama_answer_text(content_text: str) -> str:
     cleaned = str(content_text or "").strip()
     if not cleaned:
         raise ValueError("Ollama returned empty final content")
-    if cleaned.startswith("{") or cleaned.startswith("["):
-        answer, _parsed_citations = _extract_json_answer(cleaned)
-        return answer
+    # JSON-in-text is optional: parse when present, but accept plain text as success.
+    if "{" in cleaned and "}" in cleaned:
+        try:
+            answer, _parsed_citations = _extract_json_answer(cleaned)
+            return answer
+        except Exception:
+            pass
     return cleaned
+
+
+def _resolve_ollama_num_predict_values(
+    *,
+    ollama_num_predict: int,
+    ollama_retry_num_predict: int,
+    max_context_chars: int,
+    ollama_num_predict_auto: bool,
+) -> Tuple[int, int]:
+    first = int(ollama_num_predict)
+    retry = int(ollama_retry_num_predict)
+    if bool(ollama_num_predict_auto) and int(max_context_chars) >= 7000:
+        first = min(max(first, 2048), 4096)
+        retry = min(max(retry, 3072), 4096)
+    return first, retry
 
 
 def _messages_to_generate_prompt(messages: Sequence[Dict[str, str]]) -> str:
@@ -545,6 +569,8 @@ def generate_answer(
     temperature: float = 0.2,
     ollama_num_predict: int = 1536,
     ollama_retry_num_predict: int = 2048,
+    max_context_chars: int = 6000,
+    ollama_num_predict_auto: bool = True,
     ollama_think: bool | str = False,
     fallback_citations: Optional[Sequence[Dict[str, Any]]] = None,
     ollama_debug_hook: Optional[Callable[[Dict[str, Any]], None]] = None,
@@ -587,12 +613,12 @@ def generate_answer(
         think_value = parse_ollama_think(ollama_think)
         num_ctx = getattr(provider, "ollama_num_ctx", None)
         debug_hook = ollama_debug_hook
-        initial_num_predict = int(ollama_num_predict)
-        length_retry_num_predict = min(
-            max(int(ollama_retry_num_predict), initial_num_predict * 2),
-            4096,
+        initial_num_predict, retry_num_predict = _resolve_ollama_num_predict_values(
+            ollama_num_predict=ollama_num_predict,
+            ollama_retry_num_predict=ollama_retry_num_predict,
+            max_context_chars=max_context_chars,
+            ollama_num_predict_auto=ollama_num_predict_auto,
         )
-        ultra_short_num_predict = min(max(initial_num_predict, 1024), 1536)
 
         attempts = [
             {
@@ -602,50 +628,27 @@ def generate_answer(
                 "temperature": float(temperature),
                 "simplify_system_prompt": False,
                 "strict_json": False,
-                "use_ultra_short_prompt": False,
                 "use_final_answer_prompt": False,
                 "requires_retryable_failure": False,
-                "requires_length_done_reason": False,
             },
             {
                 "name": "retry_length_boost",
-                "context_limit": 1200,
-                "num_predict": length_retry_num_predict,
+                "context_limit": 1600,
+                "num_predict": retry_num_predict,
                 "temperature": 0.0,
                 "simplify_system_prompt": True,
                 "strict_json": False,
-                "use_ultra_short_prompt": False,
                 "use_final_answer_prompt": True,
                 "requires_retryable_failure": True,
-                "requires_length_done_reason": True,
-            },
-            {
-                "name": "ultra_short_json",
-                "context_limit": 1000,
-                "num_predict": ultra_short_num_predict,
-                "temperature": 0.0,
-                "simplify_system_prompt": True,
-                "strict_json": False,
-                "use_ultra_short_prompt": True,
-                "use_final_answer_prompt": False,
-                "requires_retryable_failure": True,
-                "requires_length_done_reason": False,
             },
         ]
         last_error: Optional[Exception] = None
         last_failure_fields: Dict[str, Any] = {}
         saw_retryable_failure = False
-        saw_empty_content_with_length = False
         for attempt_index, attempt in enumerate(attempts):
             if attempt["requires_retryable_failure"] and not saw_retryable_failure:
                 continue
-            if attempt["requires_length_done_reason"] and not saw_empty_content_with_length:
-                continue
-            if attempt["use_ultra_short_prompt"]:
-                attempt_messages = _build_ultra_short_json_messages(
-                    messages, context_limit=int(attempt["context_limit"])
-                )
-            elif attempt["use_final_answer_prompt"]:
+            if attempt["use_final_answer_prompt"]:
                 attempt_messages = _build_final_answer_first_messages(
                     messages, context_limit=int(attempt["context_limit"])
                 )
@@ -729,8 +732,6 @@ def generate_answer(
                             "raw_response": parsed_payload.get("raw"),
                         }
                         saw_retryable_failure = True
-                        if str(done_reason or "").strip().lower() == "length":
-                            saw_empty_content_with_length = True
                         last_error = _build_attempt_failure_error(
                             attempt_name=str(attempt["name"]),
                             attempt_index=attempt_index,
@@ -753,8 +754,6 @@ def generate_answer(
                         "raw_response": parsed_payload.get("raw"),
                     }
                     saw_retryable_failure = True
-                    if str(done_reason or "").strip().lower() == "length":
-                        saw_empty_content_with_length = True
                     last_error = _build_attempt_failure_error(
                         attempt_name=str(attempt["name"]),
                         attempt_index=attempt_index,
@@ -772,8 +771,6 @@ def generate_answer(
                     "raw_response": parsed_payload.get("raw"),
                 }
                 saw_retryable_failure = True
-                if str(done_reason or "").strip().lower() == "length":
-                    saw_empty_content_with_length = True
                 last_error = _build_attempt_failure_error(
                     attempt_name=str(attempt["name"]),
                     attempt_index=attempt_index,
@@ -828,12 +825,12 @@ def generate_answer(
         think_value = parse_ollama_think(ollama_think)
         num_ctx = getattr(provider, "ollama_num_ctx", None)
         debug_hook = ollama_debug_hook
-        initial_num_predict = int(ollama_num_predict)
-        length_retry_num_predict = min(
-            max(int(ollama_retry_num_predict), initial_num_predict * 2),
-            4096,
+        initial_num_predict, retry_num_predict = _resolve_ollama_num_predict_values(
+            ollama_num_predict=ollama_num_predict,
+            ollama_retry_num_predict=ollama_retry_num_predict,
+            max_context_chars=max_context_chars,
+            ollama_num_predict_auto=ollama_num_predict_auto,
         )
-        ultra_short_num_predict = min(max(initial_num_predict, 1024), 1536)
 
         attempts = [
             {
@@ -843,51 +840,28 @@ def generate_answer(
                 "temperature": float(temperature),
                 "simplify_system_prompt": False,
                 "strict_json": False,
-                "use_ultra_short_prompt": False,
                 "use_final_answer_prompt": False,
                 "requires_retryable_failure": False,
-                "requires_length_done_reason": False,
             },
             {
                 "name": "retry_length_boost",
-                "context_limit": 1200,
-                "num_predict": length_retry_num_predict,
+                "context_limit": 1600,
+                "num_predict": retry_num_predict,
                 "temperature": 0.0,
                 "simplify_system_prompt": True,
                 "strict_json": False,
-                "use_ultra_short_prompt": False,
                 "use_final_answer_prompt": True,
                 "requires_retryable_failure": True,
-                "requires_length_done_reason": True,
-            },
-            {
-                "name": "ultra_short_json",
-                "context_limit": 1000,
-                "num_predict": ultra_short_num_predict,
-                "temperature": 0.0,
-                "simplify_system_prompt": True,
-                "strict_json": False,
-                "use_ultra_short_prompt": True,
-                "use_final_answer_prompt": False,
-                "requires_retryable_failure": True,
-                "requires_length_done_reason": False,
             },
         ]
         last_error: Optional[Exception] = None
         last_failure_fields: Dict[str, Any] = {}
         saw_retryable_failure = False
-        saw_empty_content_with_length = False
         for attempt_index, attempt in enumerate(attempts):
             attempt_messages: List[Dict[str, str]]
             if attempt["requires_retryable_failure"] and not saw_retryable_failure:
                 continue
-            if attempt["requires_length_done_reason"] and not saw_empty_content_with_length:
-                continue
-            if attempt["use_ultra_short_prompt"]:
-                attempt_messages = _build_ultra_short_json_messages(
-                    messages, context_limit=int(attempt["context_limit"])
-                )
-            elif attempt["use_final_answer_prompt"]:
+            if attempt["use_final_answer_prompt"]:
                 attempt_messages = _build_final_answer_first_messages(
                     messages, context_limit=int(attempt["context_limit"])
                 )
@@ -964,11 +938,6 @@ def generate_answer(
                             "raw_response": parsed_payload.get("raw"),
                         }
                         saw_retryable_failure = True
-                        if (
-                            str(parsed_payload.get("done_reason") or "").strip().lower()
-                            == "length"
-                        ):
-                            saw_empty_content_with_length = True
                         last_error = _build_attempt_failure_error(
                             attempt_name=str(attempt["name"]),
                             attempt_index=attempt_index,
@@ -990,8 +959,6 @@ def generate_answer(
                         "raw_response": parsed_payload.get("raw"),
                     }
                     saw_retryable_failure = True
-                    if str(parsed_payload.get("done_reason") or "").strip().lower() == "length":
-                        saw_empty_content_with_length = True
                     last_error = _build_attempt_failure_error(
                         attempt_name=str(attempt["name"]),
                         attempt_index=attempt_index,
@@ -1009,8 +976,6 @@ def generate_answer(
                     "raw_response": parsed_payload.get("raw"),
                 }
                 saw_retryable_failure = True
-                if str(parsed_payload.get("done_reason") or "").strip().lower() == "length":
-                    saw_empty_content_with_length = True
                 last_error = _build_attempt_failure_error(
                     attempt_name=str(attempt["name"]),
                     attempt_index=attempt_index,

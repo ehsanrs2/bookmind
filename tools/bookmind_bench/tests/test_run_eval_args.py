@@ -24,6 +24,7 @@ def test_eval_args_defaults() -> None:
     assert args.ollama_api == "generate"
     assert args.ollama_num_predict == 1536
     assert args.ollama_retry_num_predict == 2048
+    assert args.ollama_num_predict_auto is True
     assert args.ollama_think is False
     assert args.max_tokens == 512
     assert args.temperature == 0.2
@@ -95,6 +96,8 @@ def test_cmd_eval_parses_content_types_and_bool(tmp_path: Path, monkeypatch) -> 
     assert captured["backend_cfg"]["ollama_api"] == "chat"
     assert captured["gen_cfg"]["ollama_num_predict"] == 1777
     assert captured["gen_cfg"]["ollama_retry_num_predict"] == 2555
+    assert captured["gen_cfg"]["ollama_num_predict_auto"] is True
+    assert captured["gen_cfg"]["ollama_api"] == "chat"
     assert captured["gen_cfg"]["ollama_think"] == "high"
     assert captured["progress"] is False
 
@@ -105,3 +108,74 @@ def test_eval_args_progress_toggle() -> None:
         ["eval", "--queries", "queries.json", "--out", "eval_out", "--progress", "false"]
     )
     assert args.progress is False
+
+
+def test_cmd_eval_autotunes_large_context_num_predict(tmp_path: Path, monkeypatch) -> None:
+    queries_path = tmp_path / "queries.json"
+    queries_path.write_text('[{"id":"q1","query":"x"}]\n', encoding="utf-8")
+
+    captured = {}
+
+    def _fake_run_eval(**kwargs):
+        captured.update(kwargs)
+        return {"summary": {"count_queries": 1, "avg_total_ms": 1, "avg_num_citations": 0}}
+
+    monkeypatch.setattr(run, "run_eval", _fake_run_eval)
+    monkeypatch.setattr(run, "write_reports", lambda results, output_dir: None)
+    monkeypatch.setattr(run, "load_queries", lambda path: [{"id": "q1", "query": "x"}])
+
+    parser = run.build_parser()
+    args = parser.parse_args(
+        [
+            "eval",
+            "--queries",
+            str(queries_path),
+            "--out",
+            str(tmp_path / "eval"),
+            "--max_context_chars",
+            "7000",
+        ]
+    )
+    exit_code = args.func(args)
+    assert exit_code == 0
+    assert captured["gen_cfg"]["ollama_num_predict"] == 2048
+    assert captured["gen_cfg"]["ollama_retry_num_predict"] == 3072
+
+
+def test_cmd_eval_can_disable_autotune(tmp_path: Path, monkeypatch) -> None:
+    queries_path = tmp_path / "queries.json"
+    queries_path.write_text('[{"id":"q1","query":"x"}]\n', encoding="utf-8")
+
+    captured = {}
+
+    def _fake_run_eval(**kwargs):
+        captured.update(kwargs)
+        return {"summary": {"count_queries": 1, "avg_total_ms": 1, "avg_num_citations": 0}}
+
+    monkeypatch.setattr(run, "run_eval", _fake_run_eval)
+    monkeypatch.setattr(run, "write_reports", lambda results, output_dir: None)
+    monkeypatch.setattr(run, "load_queries", lambda path: [{"id": "q1", "query": "x"}])
+
+    parser = run.build_parser()
+    args = parser.parse_args(
+        [
+            "eval",
+            "--queries",
+            str(queries_path),
+            "--out",
+            str(tmp_path / "eval"),
+            "--max_context_chars",
+            "9000",
+            "--ollama_num_predict",
+            "1700",
+            "--ollama_retry_num_predict",
+            "2400",
+            "--ollama_num_predict_auto",
+            "false",
+        ]
+    )
+    exit_code = args.func(args)
+    assert exit_code == 0
+    assert captured["gen_cfg"]["ollama_num_predict"] == 1700
+    assert captured["gen_cfg"]["ollama_retry_num_predict"] == 2400
+    assert captured["gen_cfg"]["ollama_num_predict_auto"] is False
