@@ -73,8 +73,13 @@ def test_qdrant_payload_and_point_id(tmp_path, monkeypatch):
     records_path.write_text(
         json.dumps(
             {
+                "document_id": "doc_123",
+                "source_id": "doc_123",
+                "chunk_id": "v1_chunk_abc",
                 "stable_id": "dbf3ecf3a5add564",
                 "page": 2,
+                "page_index": 2,
+                "region_index": 1,
                 "bbox": [1, 2, 3, 4],
                 "content_type": "figure_caption",
                 "text": "caption text",
@@ -115,8 +120,13 @@ def test_qdrant_payload_and_point_id(tmp_path, monkeypatch):
     assert isinstance(point.id, int)
     assert point.id == int("dbf3ecf3a5add564", 16)
     payload = point.payload
+    assert payload["document_id"] == "doc_123"
+    assert payload["source_id"] == "doc_123"
+    assert payload["chunk_id"] == "v1_chunk_abc"
     assert payload["stable_id"] == "dbf3ecf3a5add564"
     assert payload["page"] == 2
+    assert payload["page_index"] == 2
+    assert payload["region_index"] == 1
     assert payload["bbox"] == [1, 2, 3, 4]
     assert payload["content_type"] == "figure_caption"
     assert payload["text"] == "caption text"

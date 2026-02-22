@@ -5,6 +5,7 @@ def test_build_context_enforces_bounds_and_citations_fields() -> None:
     results = [
         {
             "stable_id": "text_001",
+            "chunk_id": "v1_chunk_text",
             "page": 3,
             "bbox": [1, 2, 3, 4],
             "content_type": "text",
@@ -13,6 +14,7 @@ def test_build_context_enforces_bounds_and_citations_fields() -> None:
         },
         {
             "stable_id": "fig_002",
+            "chunk_id": "v1_chunk_fig",
             "page": 5,
             "bbox": [10, 20, 30, 40],
             "content_type": "figure_caption",
@@ -41,6 +43,7 @@ def test_build_context_enforces_bounds_and_citations_fields() -> None:
     first = citations[0]
     assert first["rank"] == 1
     assert first["stable_id"] == "text_001"
+    assert first["chunk_id"] == "v1_chunk_text"
     assert first["page"] == 3
     assert first["content_type"] == "text"
     assert first["bbox"] == [1, 2, 3, 4]
@@ -48,6 +51,7 @@ def test_build_context_enforces_bounds_and_citations_fields() -> None:
     second = citations[1]
     assert second["rank"] == 2
     assert second["stable_id"] == "fig_002"
+    assert second["chunk_id"] == "v1_chunk_fig"
     assert second["figure_ref"] is not None
     assert second["figure_ref"]["crop_image"] == "bundle/images/crop_2.png"
 
@@ -56,6 +60,7 @@ def test_build_context_respects_max_chars_by_snippet_boundary() -> None:
     results = [
         {
             "stable_id": "a",
+            "chunk_id": "v1_a",
             "page": 1,
             "bbox": [0, 0, 1, 1],
             "content_type": "text",
@@ -64,6 +69,7 @@ def test_build_context_respects_max_chars_by_snippet_boundary() -> None:
         },
         {
             "stable_id": "b",
+            "chunk_id": "v1_b",
             "page": 2,
             "bbox": [0, 0, 1, 1],
             "content_type": "text",

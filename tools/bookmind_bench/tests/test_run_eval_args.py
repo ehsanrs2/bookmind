@@ -28,6 +28,9 @@ def test_eval_args_defaults() -> None:
     assert args.ollama_think is False
     assert args.max_tokens == 512
     assert args.temperature == 0.2
+    assert args.force_citations is False
+    assert args.citation_repair_retry is None
+    assert args.citation_min_count == 1
     assert args.progress is True
 
 
@@ -99,7 +102,45 @@ def test_cmd_eval_parses_content_types_and_bool(tmp_path: Path, monkeypatch) -> 
     assert captured["gen_cfg"]["ollama_num_predict_auto"] is True
     assert captured["gen_cfg"]["ollama_api"] == "chat"
     assert captured["gen_cfg"]["ollama_think"] == "high"
+    assert captured["gen_cfg"]["force_citations"] is False
+    assert captured["gen_cfg"]["citation_repair_retry"] is False
+    assert captured["gen_cfg"]["citation_min_count"] == 1
     assert captured["progress"] is False
+
+
+def test_cmd_eval_force_citations_sets_default_repair_retry(tmp_path: Path, monkeypatch) -> None:
+    queries_path = tmp_path / "queries.json"
+    queries_path.write_text('[{"id":"q1","query":"x"}]\n', encoding="utf-8")
+
+    captured = {}
+
+    def _fake_run_eval(**kwargs):
+        captured.update(kwargs)
+        return {"summary": {"count_queries": 1, "avg_total_ms": 10, "avg_num_citations": 1}}
+
+    monkeypatch.setattr(run, "run_eval", _fake_run_eval)
+    monkeypatch.setattr(run, "write_reports", lambda results, output_dir: None)
+    monkeypatch.setattr(run, "load_queries", lambda path: [{"id": "q1", "query": "x"}])
+
+    parser = run.build_parser()
+    args = parser.parse_args(
+        [
+            "eval",
+            "--queries",
+            str(queries_path),
+            "--out",
+            str(tmp_path / "eval"),
+            "--force_citations",
+            "true",
+            "--citation_min_count",
+            "2",
+        ]
+    )
+    exit_code = args.func(args)
+    assert exit_code == 0
+    assert captured["gen_cfg"]["force_citations"] is True
+    assert captured["gen_cfg"]["citation_repair_retry"] is True
+    assert captured["gen_cfg"]["citation_min_count"] == 2
 
 
 def test_eval_args_progress_toggle() -> None:

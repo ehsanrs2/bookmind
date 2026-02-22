@@ -34,7 +34,7 @@ def test_run_eval_computes_summary_metrics(tmp_path: Path, monkeypatch) -> None:
         def chat(self, messages, max_tokens, temperature):
             user_text = messages[1]["content"]
             if "diagram" in user_text.lower():
-                return "Wired path [2:f1]. No second cite.", {"total_tokens": 10}
+                return "Caption shows diagram path [2:f1].", {"total_tokens": 10}
             return "Parts listed. No citation marker here.", {"total_tokens": 12}
 
     class _Clock:
@@ -75,19 +75,37 @@ def test_run_eval_computes_summary_metrics(tmp_path: Path, monkeypatch) -> None:
     assert summary["avg_total_ms"] == 70.0
     assert summary["p50_total_ms"] == 70.0
     assert summary["avg_answer_len_chars"] > 0
+    assert summary["avg_context_citations_per_query"] == 2.0
+    assert summary["avg_model_citations_per_query"] == 0.5
     assert summary["avg_num_citations"] == 2.0
+    assert summary["percent_queries_with_any_context_citation"] == 100.0
     assert summary["percent_queries_with_any_citation"] == 100.0
+    assert summary["verification_pass_rate"] == 0.5
     assert summary["hit@k_pages"] == 50.0
     assert summary["expected_pages_evaluable_queries"] == 2
 
     q1 = results["queries"][0]
     assert q1["retrieved_ids"][0] == "f1"
     assert q1["citation_rate"] > 0
+    assert q1["model_citations_total"] == 1
+    assert q1["citations_total"] == 1
+    assert q1["citations_resolved"] == 1
+    assert q1["citations_resolvable"] is True
+    assert q1["cited_pages"] == [2]
+    assert q1["first_cited_rank"] == 1
+    assert q1["verification_status"] == "PASS"
+    assert q1["verification_reason"]
     assert q1["answer_text"]
     assert q1["answer_len_chars"] > 0
 
     q2 = results["queries"][1]
     assert q2["citation_rate"] == 0.0
+    assert q2["model_citations_total"] == 0
+    assert q2["citations_total"] == 0
+    assert q2["citations_resolved"] == 0
+    assert q2["citations_resolvable"] is True
+    assert q2["verification_status"] == "FAIL_NO_CITATIONS"
+    assert q2["verification_reason"]
     assert q2["answer_text"]
     assert q2["answer_len_chars"] > 0
 
@@ -277,3 +295,147 @@ def test_run_eval_writes_ollama_attempt_artifacts_on_failure(tmp_path: Path, mon
     assert (tmp_path / "per_query" / "q01_retry_response.json").exists()
     assert (tmp_path / "per_query" / "q01_extract_request.json").exists()
     assert (tmp_path / "per_query" / "q01_extract_response.json").exists()
+
+
+def test_run_eval_force_citations_repairs_missing_citations(tmp_path: Path, monkeypatch) -> None:
+    queries = [{"id": "q1", "query": "What opens?", "expected_pages": [1]}]
+
+    def _fake_search_query(**kwargs):
+        return [
+            {
+                "stable_id": "s1",
+                "chunk_id": "v1_chunk_s1",
+                "page": 1,
+                "content_type": "text",
+                "text": "The valve opens during startup.",
+                "meta": {},
+            }
+        ]
+
+    class _FakeProvider:
+        pass
+
+    calls = {"count": 0}
+    repair_prompt = {"user_content": ""}
+
+    def _fake_generate_answer(**kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return "The valve opens during startup.", {"total_tokens": 3}
+        messages = kwargs.get("messages") or []
+        if isinstance(messages, list) and len(messages) > 1 and isinstance(messages[1], dict):
+            repair_prompt["user_content"] = str(messages[1].get("content") or "")
+        return "The valve opens during startup [1:v1_chunk_s1].", {"total_tokens": 4}
+
+    monkeypatch.setattr(eval_pack, "search_query", _fake_search_query)
+    monkeypatch.setattr(eval_pack, "build_vlm_provider", lambda **kwargs: _FakeProvider())
+    monkeypatch.setattr(eval_pack, "generate_answer", _fake_generate_answer)
+
+    results = eval_pack.run_eval(
+        queries=queries,
+        qdrant_url="http://127.0.0.1:6333",
+        collection="bookmind_bench",
+        backend_cfg={"backend": "vllm"},
+        retrieval_cfg={},
+        gen_cfg={
+            "force_citations": True,
+            "citation_repair_retry": True,
+            "citation_min_count": 1,
+        },
+        output_dir=tmp_path,
+    )
+
+    row = results["queries"][0]
+    assert calls["count"] == 2
+    assert row["citation_repair_applied"] is True
+    assert row["citation_repair_success"] is True
+    assert row["citations_total"] >= 1
+    assert row["citations_resolvable"] is True
+    assert row["verification_status"] == "PASS"
+    assert "Allowed citation IDs (use ONLY these): v1_chunk_s1" in repair_prompt["user_content"]
+
+
+def test_run_eval_force_citations_unresolved_id_fails_resolvable(tmp_path: Path, monkeypatch) -> None:
+    queries = [{"id": "q1", "query": "What opens?", "expected_pages": [1]}]
+
+    def _fake_search_query(**kwargs):
+        return [
+            {
+                "stable_id": "s1",
+                "chunk_id": "v1_chunk_s1",
+                "page": 1,
+                "content_type": "text",
+                "text": "The valve opens during startup.",
+                "meta": {},
+            }
+        ]
+
+    class _FakeProvider:
+        pass
+
+    def _fake_generate_answer(**kwargs):
+        return "The valve opens during startup [1:v1_nonexistent].", {"total_tokens": 3}
+
+    monkeypatch.setattr(eval_pack, "search_query", _fake_search_query)
+    monkeypatch.setattr(eval_pack, "build_vlm_provider", lambda **kwargs: _FakeProvider())
+    monkeypatch.setattr(eval_pack, "generate_answer", _fake_generate_answer)
+
+    results = eval_pack.run_eval(
+        queries=queries,
+        qdrant_url="http://127.0.0.1:6333",
+        collection="bookmind_bench",
+        backend_cfg={"backend": "vllm"},
+        retrieval_cfg={},
+        gen_cfg={
+            "force_citations": True,
+            "citation_repair_retry": False,
+            "citation_min_count": 1,
+        },
+        output_dir=tmp_path,
+    )
+    row = results["queries"][0]
+    assert row["citations_total"] == 1
+    assert row["citations_resolved"] == 0
+    assert row["citations_resolvable"] is False
+    assert row["verification_status"] == "FAIL_UNRESOLVABLE_CITATIONS"
+    assert row["verification_reason"] == "All cited IDs were not in allowlist / not retrieved."
+
+
+def test_run_eval_force_citations_skips_repair_for_not_found(tmp_path: Path, monkeypatch) -> None:
+    queries = [{"id": "q1", "query": "Unknown", "expected_pages": [1]}]
+
+    def _fake_search_query(**kwargs):
+        return [{"stable_id": "s1", "page": 1, "content_type": "text", "text": "Known fact only.", "meta": {}}]
+
+    class _FakeProvider:
+        pass
+
+    calls = {"count": 0}
+
+    def _fake_generate_answer(**kwargs):
+        calls["count"] += 1
+        return "NOT_FOUND", {"total_tokens": 1}
+
+    monkeypatch.setattr(eval_pack, "search_query", _fake_search_query)
+    monkeypatch.setattr(eval_pack, "build_vlm_provider", lambda **kwargs: _FakeProvider())
+    monkeypatch.setattr(eval_pack, "generate_answer", _fake_generate_answer)
+
+    results = eval_pack.run_eval(
+        queries=queries,
+        qdrant_url="http://127.0.0.1:6333",
+        collection="bookmind_bench",
+        backend_cfg={"backend": "vllm"},
+        retrieval_cfg={},
+        gen_cfg={
+            "force_citations": True,
+            "citation_repair_retry": True,
+            "citation_min_count": 1,
+        },
+        output_dir=tmp_path,
+    )
+
+    row = results["queries"][0]
+    assert calls["count"] == 1
+    assert row["answer_text"] == "NOT_FOUND"
+    assert row["citation_repair_applied"] is False
+    assert row["citation_repair_success"] is False

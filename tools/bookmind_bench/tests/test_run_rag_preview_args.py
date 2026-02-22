@@ -26,6 +26,11 @@ def test_rag_preview_args_defaults() -> None:
     assert args.max_tokens == 512
     assert args.temperature == 0.2
     assert args.show_snippets is False
+    assert args.require_resolvable_citations is False
+    assert args.enforce_verified is False
+    assert args.force_citations is False
+    assert args.citation_repair_retry is None
+    assert args.citation_min_count == 1
 
 
 def test_cmd_rag_preview_routes_calls(tmp_path, monkeypatch) -> None:
@@ -53,10 +58,11 @@ def test_cmd_rag_preview_routes_calls(tmp_path, monkeypatch) -> None:
 
     def _fake_generate_answer(**kwargs):
         captured["generate_answer"] = kwargs
-        return "answer", {"total_tokens": 1}
+        return "hello [1:s1]", {"total_tokens": 1}
 
-    def _fake_format_preview_output(answer_text, citations, show_snippets):
-        assert answer_text == "answer"
+    def _fake_format_preview_output(answer_text, citations, show_snippets, model_citations=None):
+        assert answer_text == "hello [1:s1]"
+        assert isinstance(model_citations, dict)
         return "ok\n"
 
     monkeypatch.setattr(run, "search_query", _fake_search_query)
@@ -192,3 +198,114 @@ def test_cmd_rag_preview_can_disable_autotune(monkeypatch) -> None:
     assert captured["ollama_num_predict"] == 1700
     assert captured["ollama_retry_num_predict"] == 2400
     assert captured["ollama_num_predict_auto"] is False
+
+
+def test_cmd_rag_preview_require_resolvable_citations_fails_on_none(monkeypatch) -> None:
+    def _fake_search_query(**kwargs):
+        return [{"stable_id": "s1", "chunk_id": "v1_c1", "page": 1, "content_type": "text", "text": "x", "meta": {}}]
+
+    class _FakeProvider:
+        pass
+
+    monkeypatch.setattr(run, "search_query", _fake_search_query)
+    monkeypatch.setattr(run, "build_vlm_provider", lambda **kwargs: _FakeProvider())
+    monkeypatch.setattr(run, "generate_answer", lambda **kwargs: ("answer without cites", {"total_tokens": 1}))
+    monkeypatch.setattr(run, "format_preview_output", lambda **kwargs: "ok\n")
+
+    parser = run.build_parser()
+    args = parser.parse_args(
+        [
+            "rag-preview",
+            "--query",
+            "find x",
+            "--require_resolvable_citations",
+            "true",
+        ]
+    )
+    try:
+        args.func(args)
+        raise AssertionError("Expected SystemExit")
+    except SystemExit as exc:
+        assert "NO_CITATIONS" in str(exc)
+
+
+def test_cmd_rag_preview_force_citations_enables_default_repair_retry(monkeypatch) -> None:
+    captured = {"calls": 0}
+
+    def _fake_search_query(**kwargs):
+        return [{"stable_id": "s1", "chunk_id": "v1_c1", "page": 1, "content_type": "text", "text": "ctx", "meta": {}}]
+
+    class _FakeProvider:
+        pass
+
+    def _fake_generate_answer(**kwargs):
+        captured["calls"] += 1
+        if captured["calls"] == 1:
+            return "answer without citations", {"total_tokens": 1}
+        return "answer [1:s1]", {"total_tokens": 1}
+
+    monkeypatch.setattr(run, "search_query", _fake_search_query)
+    monkeypatch.setattr(run, "build_vlm_provider", lambda **kwargs: _FakeProvider())
+    monkeypatch.setattr(run, "generate_answer", _fake_generate_answer)
+    monkeypatch.setattr(run, "format_preview_output", lambda **kwargs: "ok\n")
+
+    parser = run.build_parser()
+    args = parser.parse_args(["rag-preview", "--query", "find x", "--force_citations", "true"])
+    exit_code = args.func(args)
+    assert exit_code == 0
+    assert captured["calls"] == 2
+
+
+def test_cmd_rag_preview_require_resolvable_citations_fails_on_unresolved(monkeypatch) -> None:
+    def _fake_search_query(**kwargs):
+        return [{"stable_id": "s1", "chunk_id": "v1_c1", "page": 1, "content_type": "text", "text": "x", "meta": {}}]
+
+    class _FakeProvider:
+        pass
+
+    monkeypatch.setattr(run, "search_query", _fake_search_query)
+    monkeypatch.setattr(run, "build_vlm_provider", lambda **kwargs: _FakeProvider())
+    monkeypatch.setattr(run, "generate_answer", lambda **kwargs: ("answer [2:s2]", {"total_tokens": 1}))
+    monkeypatch.setattr(run, "format_preview_output", lambda **kwargs: "ok\n")
+
+    parser = run.build_parser()
+    args = parser.parse_args(
+        [
+            "rag-preview",
+            "--query",
+            "find x",
+            "--require_resolvable_citations",
+            "true",
+        ]
+    )
+    try:
+        args.func(args)
+        raise AssertionError("Expected SystemExit")
+    except SystemExit as exc:
+        assert "UNRESOLVABLE_CITATIONS" in str(exc)
+
+
+def test_cmd_rag_preview_enforce_verified_fails(monkeypatch) -> None:
+    def _fake_search_query(**kwargs):
+        return [{"stable_id": "s1", "chunk_id": "v1_c1", "page": 1, "content_type": "text", "text": "ctx", "meta": {}}]
+
+    class _FakeProvider:
+        pass
+
+    monkeypatch.setattr(run, "search_query", _fake_search_query)
+    monkeypatch.setattr(run, "build_vlm_provider", lambda **kwargs: _FakeProvider())
+    monkeypatch.setattr(run, "generate_answer", lambda **kwargs: ("answer without cites", {"total_tokens": 1}))
+    monkeypatch.setattr(run, "format_preview_output", lambda **kwargs: "ok\n")
+
+    parser = run.build_parser()
+    args = parser.parse_args(
+        [
+            "rag-preview",
+            "--query",
+            "find x",
+            "--enforce_verified",
+            "true",
+        ]
+    )
+    exit_code = args.func(args)
+    assert exit_code == 2
