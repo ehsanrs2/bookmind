@@ -71,6 +71,28 @@ def _stable_id(page: int, content_type: str, bbox: Optional[Sequence[float]], te
     return hashlib.sha1(token.encode("utf-8")).hexdigest()[:16]
 
 
+def _normalize_abs_source_path(source_path: str | Path) -> str:
+    return Path(source_path).expanduser().resolve(strict=False).as_posix()
+
+
+def _document_id_for_source_path(source_path: str | Path) -> str:
+    normalized = _normalize_abs_source_path(source_path)
+    return hashlib.sha1(normalized.encode("utf-8")).hexdigest()
+
+
+def _chunk_id(
+    *,
+    document_id: str,
+    page: int,
+    content_type: str,
+    bbox: Optional[Sequence[float]],
+    text: str,
+) -> str:
+    text_norm = _norm_text(text)
+    token = f"{document_id}|{page}|{content_type}|{_bbox_norm_token(bbox)}|{text_norm}"
+    return "v1_" + hashlib.sha1(token.encode("utf-8")).hexdigest()
+
+
 def _bbox_iou(box_a: Sequence[float], box_b: Sequence[float]) -> float:
     ax0, ay0, ax1, ay1 = box_a
     bx0, by0, bx1, by1 = box_b
@@ -155,6 +177,8 @@ def _append_jsonl(path: Path, rows: Iterable[Dict[str, Any]]) -> None:
 
 def _build_ingest_record(
     *,
+    document_id: str,
+    source_id: str,
     page: int,
     content_type: str,
     text: str,
@@ -192,8 +216,18 @@ def _build_ingest_record(
     if figure_context:
         meta["figure_context"] = figure_context
     return {
+        "document_id": document_id,
+        "source_id": source_id,
+        "chunk_id": _chunk_id(
+            document_id=document_id,
+            page=page,
+            content_type=content_type,
+            bbox=bbox,
+            text=text_norm,
+        ),
         "stable_id": _stable_id(page=page, content_type=content_type, bbox=bbox, text=text_norm),
         "page": page,
+        "page_index": page,
         "content_type": content_type,
         "text": text_norm,
         "bbox": bbox_norm,
@@ -311,6 +345,10 @@ def merge_outputs(
     if vlm_jsonl is not None and not vlm_jsonl.exists():
         raise SystemExit(f"VLM JSONL not found: {vlm_jsonl}")
 
+    source_path = _normalize_abs_source_path(paddle_jsonl)
+    document_id = _document_id_for_source_path(source_path)
+    source_id = document_id
+
     vlm_by_page: Dict[int, List[Dict[str, Any]]] = {}
     if vlm_jsonl is not None:
         for line_id, row in _read_jsonl_with_line_ids(vlm_jsonl):
@@ -377,6 +415,8 @@ def merge_outputs(
             if len(text) < min_text_chars:
                 continue
             record = _build_ingest_record(
+                document_id=document_id,
+                source_id=source_id,
                 page=page,
                 content_type="text",
                 text=text,
@@ -396,6 +436,8 @@ def merge_outputs(
             if not text:
                 continue
             record = _build_ingest_record(
+                document_id=document_id,
+                source_id=source_id,
                 page=page,
                 content_type="table",
                 text=text,
@@ -437,6 +479,8 @@ def merge_outputs(
                 nearby_page_texts=nearby_text_by_page.get(page, []),
             )
             record = _build_ingest_record(
+                document_id=document_id,
+                source_id=source_id,
                 page=page,
                 content_type="figure_caption",
                 text=match["text"],
@@ -458,6 +502,29 @@ def merge_outputs(
             out_rows.append(record)
             emitted_by_type["figure_caption"] += 1
             matched_captions += 1
+
+    indexed_rows: List[Tuple[int, Dict[str, Any]]] = list(enumerate(out_rows))
+    indexed_rows.sort(
+        key=lambda item: (
+            int(item[1].get("page") or 0),
+            _bbox_norm_token(item[1].get("bbox")),
+            str(item[1].get("content_type") or ""),
+            str(item[1].get("stable_id") or ""),
+            item[0],
+        )
+    )
+    region_index_by_row: Dict[int, int] = {}
+    per_page_counts: Dict[int, int] = {}
+    for original_idx, row in indexed_rows:
+        page_num = int(row.get("page") or 0)
+        next_index = per_page_counts.get(page_num, 0) + 1
+        per_page_counts[page_num] = next_index
+        region_index_by_row[original_idx] = next_index
+
+    for idx, row in enumerate(out_rows):
+        region_index = region_index_by_row.get(idx, 0)
+        row["region_index"] = region_index
+        row["reading_order"] = region_index
 
     _append_jsonl(out_jsonl, out_rows)
     return MergeStats(

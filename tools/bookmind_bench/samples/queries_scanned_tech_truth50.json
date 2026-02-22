@@ -1,0 +1,468 @@
+[
+  {
+    "id": "q1_title_scope",
+    "query": "What is the title or main subject of this document?",
+    "truth_pages": [
+      1,
+      2
+    ],
+    "truth_note": "Payload rows on pages 1 and 2 contain the primary headings 'STANDBY MAGNETIC COMPASS' and 'AVIONS MARCEL DASSAULT'.",
+    "category": "multi_page"
+  },
+  {
+    "id": "q2_overview",
+    "query": "Summarize the system overview in 3 concise bullet points.",
+    "truth_page_ranges": [
+      [
+        3,
+        5
+      ]
+    ],
+    "truth_note": "System-level flow appears from Figure 6 on page 3 through pressure and channel descriptions on pages 4 to 5.",
+    "category": "multi_page"
+  },
+  {
+    "id": "q3_parts_list",
+    "query": "List the key components or parts mentioned for the setup.",
+    "truth_page_ranges": [
+      [
+        1,
+        4
+      ]
+    ],
+    "truth_note": "Component lists are explicitly present in figure captions on pages 1, 2, 3, and 4.",
+    "category": "multi_page"
+  },
+  {
+    "id": "q4_pin_assignments",
+    "query": "Are there any pin assignments or connector mappings in the text or tables?",
+    "truth_pages": [
+      4,
+      5
+    ],
+    "truth_note": "Line mapping and terminal-style wiring text appears on page 4 and channel connection text appears on page 5.",
+    "category": "table"
+  },
+  {
+    "id": "q5_table_values",
+    "query": "Extract any table-style values, limits, or parameter settings if present.",
+    "truth_pages": [
+      5
+    ],
+    "truth_note": "Page 5 contains explicit parameter values including TAS and M channel test values and threshold contacts.",
+    "category": "table"
+  },
+  {
+    "id": "q6_block_diagram",
+    "query": "Explain the block diagram and how the modules connect.",
+    "truth_pages": [
+      3,
+      4
+    ],
+    "truth_note": "Figure 6 module blocks are on page 3 and the pressure connection diagram/caption is on page 4.",
+    "category": "figure_caption"
+  },
+  {
+    "id": "q7_circuit_wiring",
+    "query": "Describe the circuit wiring and signal flow shown in the figure.",
+    "truth_pages": [
+      4,
+      5
+    ],
+    "truth_note": "Pressure line wiring context is on page 4 while relay/bridge and channel signal-flow details are on page 5.",
+    "category": "multi_page"
+  },
+  {
+    "id": "q8_calibration_figure",
+    "query": "From the figure or schematic, what calibration steps are illustrated?",
+    "truth_pages": [
+      1,
+      5
+    ],
+    "truth_note": "Calibration-oriented cues come from the compass adjustment elements on page 1 and explicit channel test contacts on page 5.",
+    "category": "figure_caption"
+  },
+  {
+    "id": "q9_compass_components",
+    "query": "Which components are labeled in the standby magnetic compass figure?",
+    "truth_pages": [
+      1
+    ],
+    "truth_note": "The Figure 3 caption on page 1 enumerates labeled compass components 1 through 5.",
+    "category": "figure_caption"
+  },
+  {
+    "id": "q10_compass_compensator_role",
+    "query": "What is the role of the compensator in the standby magnetic compass?",
+    "truth_pages": [
+      1
+    ],
+    "truth_note": "Page 1 figure-caption text states that the compensator corrects magnetic deviation from aircraft fields.",
+    "category": "figure_caption"
+  },
+  {
+    "id": "q11_compass_adjustment_knob",
+    "query": "What is the adjustment screw or knob used for in Figure 3?",
+    "truth_pages": [
+      1
+    ],
+    "truth_note": "The page 1 Figure 3 caption describes the adjustment screw/knob as a calibration and alignment control.",
+    "category": "figure_caption"
+  },
+  {
+    "id": "q12_compass_output",
+    "query": "What output does the standby magnetic compass provide?",
+    "truth_pages": [
+      1
+    ],
+    "truth_note": "Page 1 caption text explicitly states the output is magnetic heading displayed on the dial/needle.",
+    "category": "text"
+  },
+  {
+    "id": "q13_horizon_power_sources",
+    "query": "What power sources are listed for the standby horizon?",
+    "truth_pages": [
+      2
+    ],
+    "truth_note": "The Figure 5 caption on page 2 lists emergency battery and 220V AC input as power sources.",
+    "category": "figure_caption"
+  },
+  {
+    "id": "q14_horizon_gimbals",
+    "query": "Which gimbals are identified in the standby horizon figure?",
+    "truth_pages": [
+      2
+    ],
+    "truth_note": "Page 2 Figure 5 caption names both roll gimbal and pitch gimbal elements.",
+    "category": "figure_caption"
+  },
+  {
+    "id": "q15_horizon_warning_light",
+    "query": "Does the standby horizon figure mention a warning light and its purpose?",
+    "truth_pages": [
+      2
+    ],
+    "truth_note": "The Figure 5 caption on page 2 includes a warning light used to indicate system status or fault.",
+    "category": "figure_caption"
+  },
+  {
+    "id": "q16_aoa_components",
+    "query": "List the main modules shown in the angle-of-attack system figure.",
+    "truth_pages": [
+      3
+    ],
+    "truth_note": "Page 3 Figure 6 caption enumerates synthetic generator, main computer, nose cone, air data cone, and indicator modules.",
+    "category": "figure_caption"
+  },
+  {
+    "id": "q17_aoa_flow_chain",
+    "query": "What is the signal-flow chain described in Figure 6?",
+    "truth_pages": [
+      3
+    ],
+    "truth_note": "The page 3 Figure 6 caption includes an explicit connection chain from generator/computer through cone and indicator/autopilot blocks.",
+    "category": "figure_caption"
+  },
+  {
+    "id": "q18_aoa_warning_threshold",
+    "query": "What warning threshold is defined in the angle-of-attack system?",
+    "truth_pages": [
+      3
+    ],
+    "truth_note": "Page 3 Figure 6 caption states a warning horn activation condition at angle of attack greater than 14 degrees.",
+    "category": "table"
+  },
+  {
+    "id": "q19_aoa_autopilot_interface",
+    "query": "How do autopilot and stab servo units relate to the angle-of-attack system?",
+    "truth_pages": [
+      3
+    ],
+    "truth_note": "The Figure 6 caption on page 3 lists autopilot and stab servo unit as recipients of angle-of-attack data/control.",
+    "category": "text"
+  },
+  {
+    "id": "q20_pitot_static_connections",
+    "query": "Which equipment is connected to pitot and static lines in the air data diagram?",
+    "truth_pages": [
+      4
+    ],
+    "truth_note": "The page 4 air-data caption itemizes pitot/static connections to indicators, computers, autopilot, and regulators.",
+    "category": "figure_caption"
+  },
+  {
+    "id": "q21_drain_points_mapping",
+    "query": "What are drain points 7, 8, and 9 mapped to?",
+    "truth_pages": [
+      4
+    ],
+    "truth_note": "Page 4 text and caption explicitly map drains 7/8/9 to static S1, static S2 plus pitot T2, and another static line.",
+    "category": "table"
+  },
+  {
+    "id": "q22_mach_indicator_mechanism",
+    "query": "How is the Mach/airspeed indicator mechanism described?",
+    "truth_pages": [
+      4
+    ],
+    "truth_note": "Page 4 text rows describe pitot-static and altimeter mechanisms with aneroid-driven pointer movement.",
+    "category": "text"
+  },
+  {
+    "id": "q23_altimeter_aneroid",
+    "query": "What pressure acts on the altimeter aneroid?",
+    "truth_pages": [
+      4
+    ],
+    "truth_note": "A page 4 text row states directly that the altimeter aneroid is subjected to static pressure.",
+    "category": "text"
+  },
+  {
+    "id": "q24_pressure_difference_p",
+    "query": "How is pressure p defined for the pitot-static aneroid?",
+    "truth_pages": [
+      4
+    ],
+    "truth_note": "Page 4 text defines pressure p as the difference between pitot pressure and static pressure.",
+    "category": "text"
+  },
+  {
+    "id": "q25_thermal_compensation_range",
+    "query": "What thermal compensation range is specified for the indicator device?",
+    "truth_pages": [
+      4
+    ],
+    "truth_note": "A page 4 row specifies a bimetal thermal compensation operation range between about 20 and +50 C.",
+    "category": "table"
+  },
+  {
+    "id": "q26_lighting_terminals",
+    "query": "Which receptacle terminals supply lighting power?",
+    "truth_pages": [
+      4
+    ],
+    "truth_note": "Page 4 text explicitly says lighting power is supplied through terminals A and B of the receptacle.",
+    "category": "text"
+  },
+  {
+    "id": "q27_lines_without_drains",
+    "query": "Which pressure lines are not fitted with drains?",
+    "truth_pages": [
+      4
+    ],
+    "truth_note": "A page 4 text row states static inlets S3 and S5 and pitot probe T1 are not fitted with drains.",
+    "category": "text"
+  },
+  {
+    "id": "q28_display_pointer_drive",
+    "query": "What drives the display pointers according to the indicator description?",
+    "truth_pages": [
+      4
+    ],
+    "truth_note": "Page 4 text includes explicit mention of aneroid deformation and movement that drives display pointers.",
+    "category": "text"
+  },
+  {
+    "id": "q29_total_temperature_channel",
+    "query": "Where is the total temperature channel referenced?",
+    "truth_pages": [
+      5
+    ],
+    "truth_note": "Page 5 includes the heading 'TOTAL TEMPERATURE CHANNEL (Figures 7 and 10)'.",
+    "category": "text"
+  },
+  {
+    "id": "q30_true_airspeed_channel",
+    "query": "Where is the true airspeed channel referenced?",
+    "truth_pages": [
+      5
+    ],
+    "truth_note": "Page 5 includes the heading for the true airspeed channel and related channel equations/text.",
+    "category": "text"
+  },
+  {
+    "id": "q31_tas_function",
+    "query": "What formula is given for TAS as a function of M and Tt?",
+    "truth_pages": [
+      5
+    ],
+    "truth_note": "A page 5 row explicitly includes the formula-style statement 'TAS = f (M Tt)'.",
+    "category": "table"
+  },
+  {
+    "id": "q32_tt_threshold_contact",
+    "query": "What temperature threshold contact is mentioned for Tt?",
+    "truth_pages": [
+      5
+    ],
+    "truth_note": "Page 5 text explicitly contains the threshold contact string 'Tt > 135 C'.",
+    "category": "table"
+  },
+  {
+    "id": "q33_tas_test_value",
+    "query": "What computed TAS value is used for channel testing?",
+    "truth_pages": [
+      5
+    ],
+    "truth_note": "A page 5 row states a computed TAS channel-test value of 771.6 kt.",
+    "category": "table"
+  },
+  {
+    "id": "q34_mach_test_value",
+    "query": "What computed Mach value is used for channel testing?",
+    "truth_pages": [
+      5
+    ],
+    "truth_note": "Page 5 contains the test contact track text with computed Mach value M = 1.35.",
+    "category": "table"
+  },
+  {
+    "id": "q35_iok_corrections",
+    "query": "Which Mach-dependent correction functions are named in the angle-of-attack computation?",
+    "truth_pages": [
+      5
+    ],
+    "truth_note": "Page 5 rows explicitly mention io(M) and K(M) correction functions for angle-of-attack computation.",
+    "category": "text"
+  },
+  {
+    "id": "q36_mit_potentiometers",
+    "query": "What are potentiometers Mit1 and Mit2 used for?",
+    "truth_pages": [
+      5
+    ],
+    "truth_note": "Page 5 text says Mit1 and Mit2 are used in true angle-of-attack computation and correction-signal summing.",
+    "category": "text"
+  },
+  {
+    "id": "q37_bcr1_signal",
+    "query": "What signal does synchro BCR1 receive at its rotor?",
+    "truth_pages": [
+      5
+    ],
+    "truth_note": "A page 5 text row states that synchro BCR1 receives the local angle-of-attack il signal at the rotor.",
+    "category": "text"
+  },
+  {
+    "id": "q38_r3_r4_bridge",
+    "query": "Where is resistor bridge R3-R4 used in the signal path?",
+    "truth_pages": [
+      5
+    ],
+    "truth_note": "Page 5 text references the angle-of-attack signal feeding one end of resistor bridge R3-R4.",
+    "category": "text"
+  },
+  {
+    "id": "q39_ap_aps_relays",
+    "query": "How are voltages aP and aPs used in the circuits?",
+    "truth_pages": [
+      5
+    ],
+    "truth_note": "Page 5 rows describe voltages aP/aPs as supplies for electronic circuits controlling relays.",
+    "category": "text"
+  },
+  {
+    "id": "q40_ttas_channel_control",
+    "query": "How is Tt information fed into TAS channel control?",
+    "truth_pages": [
+      5
+    ],
+    "truth_note": "Page 5 text states /Tt information is used to supply the TAS channel control path.",
+    "category": "text"
+  },
+  {
+    "id": "q41_antenna_correction_pot",
+    "query": "Which potentiometer is mentioned for antenna correction computations?",
+    "truth_pages": [
+      5
+    ],
+    "truth_note": "A page 5 row explicitly names the potentiometer used for antenna correction computations (dps).",
+    "category": "text"
+  },
+  {
+    "id": "q42_tas_computation_pot",
+    "query": "Which potentiometer is intended for TAS computation?",
+    "truth_pages": [
+      5
+    ],
+    "truth_note": "Page 5 text includes an explicit item naming the potentiometer intended for TAS computation.",
+    "category": "text"
+  },
+  {
+    "id": "q43_m_monitor_voltage",
+    "query": "What does voltage eM feed according to the Mach channel description?",
+    "truth_pages": [
+      5
+    ],
+    "truth_note": "A page 5 row states that voltage eM is fed to the M monitoring circuit.",
+    "category": "text"
+  },
+  {
+    "id": "q44_tas_repeater_set",
+    "query": "Which repeater potentiometers are listed for TAS?",
+    "truth_pages": [
+      5
+    ],
+    "truth_note": "Page 5 text lists repeater potentiometers TAS1 through TAS5 explicitly.",
+    "category": "table"
+  },
+  {
+    "id": "q45_m_repeater_set",
+    "query": "Which repeater potentiometers are listed for Mach-related channels?",
+    "truth_pages": [
+      5
+    ],
+    "truth_note": "A page 5 row explicitly lists repeater potentiometers M1 and M2.",
+    "category": "table"
+  },
+  {
+    "id": "q46_compass_vs_horizon",
+    "query": "Compare standby magnetic compass content with standby horizon content.",
+    "truth_page_ranges": [
+      [
+        1,
+        2
+      ]
+    ],
+    "truth_note": "Figure 3 compass content is on page 1 while Figure 5 standby horizon content is on page 2.",
+    "category": "multi_page"
+  },
+  {
+    "id": "q47_aoa_airdata_crosspage",
+    "query": "Summarize how angle-of-attack and air data topics connect across sections.",
+    "truth_page_ranges": [
+      [
+        3,
+        5
+      ]
+    ],
+    "truth_note": "Angle-of-attack system description starts on page 3 and links to air-data/channel wiring details on pages 4 and 5.",
+    "category": "multi_page"
+  },
+  {
+    "id": "q48_all_figure_index",
+    "query": "Which figure numbers and titles are present in this scanned excerpt?",
+    "truth_page_ranges": [
+      [
+        1,
+        4
+      ]
+    ],
+    "truth_note": "Figure headers and captions identify Figure 3, Figure 5, Figure 6, and the air-data caption across pages 1 to 4.",
+    "category": "multi_page"
+  },
+  {
+    "id": "q49_notin_hydraulic_pressure",
+    "query": "What hydraulic pressure setpoints are specified for the landing gear system?",
+    "truth_pages": [],
+    "truth_note": "No payload row in /tmp/bookmind_points.json contains hydraulic/landing-gear pressure content, so this query is outside the book slice.",
+    "category": "not_in_book"
+  },
+  {
+    "id": "q50_notin_gps_waypoints",
+    "query": "List the GPS waypoint coordinates and navigation database update steps.",
+    "truth_pages": [],
+    "truth_note": "No payload row in /tmp/bookmind_points.json contains GPS/waypoint/navigation database terms, so the answer is not in the scanned content.",
+    "category": "not_in_book"
+  }
+]

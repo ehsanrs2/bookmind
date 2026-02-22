@@ -304,8 +304,14 @@ Output location:
 Output schema (`ingest_record`, one JSON object per line):
 ```json
 {
+  "document_id": "8dca8b16d8e823cb3e4aa7ba112afc17be03593e",
+  "source_id": "8dca8b16d8e823cb3e4aa7ba112afc17be03593e",
+  "chunk_id": "v1_2efec8c32d6d5d40a8f0e5d2a2af744975abf9d4",
   "stable_id": "8f745148f0f56061",
   "page": 1,
+  "page_index": 1,
+  "region_index": 1,
+  "reading_order": 1,
   "content_type": "text",
   "text": "Normalized text content",
   "bbox": [12, 34, 420, 460],
@@ -324,9 +330,23 @@ Output schema (`ingest_record`, one JSON object per line):
 ```
 
 Field notes:
+- Canonical identity contract:
+  - `document_id`: `sha1(normalized_absolute_source_path)` where source path is the merge input path.
+  - `source_id`: alias of `document_id` (current compatibility mode).
+  - `chunk_id`: deterministic region identity `v1_ + sha1(document_id|page|content_type|bbox_rounded|text_norm)`.
+  - `stable_id` remains present and unchanged for backward compatibility.
+- `chunk_id` versioning rule:
+  - Prefix is required (`v1_` currently).
+  - Any future algorithm change must increment the prefix (for example `v2_...`) and keep old IDs readable.
+- Backward compatibility policy:
+  - Existing `stable_id`-based retrieval and citation behavior remains valid.
+  - New fields are additive; consumers that do not read them continue to work unchanged.
 - `stable_id`: deterministic ID from `sha1(f"{page}|{type}|{bbox_norm}|{text_norm}")[:16]`.
 - `content_type`: one of `text`, `table`, `figure_caption`.
 - `bbox`: rounded integer bbox `[x0, y0, x1, y1]` or `null`.
+- `page_index`: 1-based page index (currently equal to `page`).
+- `region_index`: deterministic ordering index within each page.
+- `reading_order`: currently equal to `region_index`.
 - `source_engines`: derived from source JSONL engine for text/tables (for example `["paddleocr"]` or `["layoutparser"]`) and `[<source_engine>, "vlm"]` for matched figure captions.
 - Figure-caption matching is page-aware and uses exact bbox first, then coordinate tolerance (`--bbox-tol`), then IoU fallback (`--iou`).
 - `figure_caption` records include additive fields under `meta`:

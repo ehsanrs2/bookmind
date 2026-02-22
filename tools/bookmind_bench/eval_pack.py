@@ -10,14 +10,18 @@ from pathlib import Path
 from statistics import median
 from typing import Any, Dict, List, Optional, Sequence
 
+from citations import parse_citations, resolve_citations
 from engines.vlm_providers import build_vlm_provider
 from qdrant_ingest import search_query
 from rag_preview import (
+    build_citation_repair_messages,
     build_context,
+    build_force_citation_allowlist,
     build_rag_messages,
     generate_answer,
     write_ollama_attempt_artifacts,
 )
+from verifier import PASS, verify_answer
 
 FIGURE_BOOST_TOKENS = (
     "figure",
@@ -27,6 +31,10 @@ FIGURE_BOOST_TOKENS = (
     "circuit",
     "wiring",
 )
+
+
+def _is_not_found_answer(answer_text: str) -> bool:
+    return str(answer_text or "").strip() == "NOT_FOUND"
 
 
 @dataclass
@@ -133,12 +141,20 @@ def load_queries(path: str | Path) -> List[Dict[str, Any]]:
         expected_pages = item.get("expected_pages")
         if expected_pages is not None and not isinstance(expected_pages, list):
             raise ValueError(f"Query item #{idx} expected_pages must be a list when present.")
+        truth_pages = item.get("truth_pages")
+        if truth_pages is not None and not isinstance(truth_pages, list):
+            raise ValueError(f"Query item #{idx} truth_pages must be a list when present.")
+        truth_page_ranges = item.get("truth_page_ranges")
+        if truth_page_ranges is not None and not isinstance(truth_page_ranges, list):
+            raise ValueError(f"Query item #{idx} truth_page_ranges must be a list when present.")
         out.append(
             {
                 "id": query_id,
                 "query": query_text,
                 "notes": str(item.get("notes") or "").strip() or None,
                 "expected_pages": expected_pages,
+                "truth_pages": truth_pages,
+                "truth_page_ranges": truth_page_ranges,
             }
         )
     return out
@@ -197,6 +213,9 @@ def run_eval(
     top_k = int(retrieval_cfg.get("top_k", 8))
     max_context_chars = int(retrieval_cfg.get("max_context_chars", 6000))
     heuristic_boost_figures = bool(retrieval_cfg.get("heuristic_boost_figures", True))
+    force_citations = bool(gen_cfg.get("force_citations", False))
+    citation_min_count = max(1, int(gen_cfg.get("citation_min_count", 1)))
+    citation_repair_retry = bool(gen_cfg.get("citation_repair_retry", force_citations))
 
     provider = build_vlm_provider(
         backend=str(backend_cfg.get("backend") or "ollama"),
@@ -212,8 +231,10 @@ def run_eval(
     rows: List[Dict[str, Any]] = []
     total_values: List[float] = []
     answer_len_values: List[int] = []
-    citation_count_values: List[int] = []
+    context_citation_count_values: List[int] = []
+    model_citation_count_values: List[int] = []
     any_citation_count = 0
+    verification_passes = 0
     hit_pages_values: List[int] = []
     failed_queries = 0
     backend_name = str(backend_cfg.get("backend") or "").strip().lower()
@@ -259,6 +280,11 @@ def run_eval(
                 query_text,
                 context_text,
                 require_json_response=False,
+                force_citations=force_citations,
+                citation_min_count=citation_min_count,
+                allowed_citation_ids=(
+                    build_force_citation_allowlist(citations) if force_citations else None
+                ),
             )
 
             progress_reporter.phase(query_id, "generate")
@@ -287,6 +313,44 @@ def run_eval(
                 generation_error = exc
 
             answer_text = str(raw_answer_text or "").strip()
+            citation_repair_applied = False
+            citation_repair_success = False
+            if generation_error is None and force_citations and citation_repair_retry:
+                parsed_initial = parse_citations(answer_text)
+                if (
+                    not _is_not_found_answer(answer_text)
+                    and len(parsed_initial) < citation_min_count
+                ):
+                    citation_repair_applied = True
+                    try:
+                        repair_messages = build_citation_repair_messages(
+                            query=query_text,
+                            context_text=context_text,
+                            original_answer=answer_text,
+                            citation_min_count=citation_min_count,
+                            allowed_citation_ids=(
+                                build_force_citation_allowlist(citations) if force_citations else None
+                            ),
+                        )
+                        repaired_answer_text, usage = generate_answer(
+                            provider=provider,
+                            messages=repair_messages,
+                            max_tokens=int(gen_cfg.get("max_tokens", 512)),
+                            temperature=float(gen_cfg.get("temperature", 0.2)),
+                            ollama_num_predict=int(gen_cfg.get("ollama_num_predict", 1536)),
+                            ollama_retry_num_predict=int(gen_cfg.get("ollama_retry_num_predict", 2048)),
+                            max_context_chars=int(gen_cfg.get("max_context_chars", max_context_chars)),
+                            ollama_num_predict_auto=bool(gen_cfg.get("ollama_num_predict_auto", True)),
+                            ollama_think=gen_cfg.get("ollama_think", False),
+                            fallback_citations=citations,
+                            ollama_debug_hook=hook,
+                        )
+                        repaired_text = str(repaired_answer_text or "").strip()
+                        if repaired_text:
+                            answer_text = repaired_text
+                        citation_repair_success = len(parse_citations(answer_text)) >= citation_min_count
+                    except Exception:
+                        citation_repair_success = False
             progress_reporter.phase(query_id, "write_artifacts")
             if generation_error is not None:
                 _write_provider_debug(
@@ -338,6 +402,32 @@ def run_eval(
             answer_len_chars = len(answer_text)
             citation_count = len(citation_rows)
             citation_rate = _citation_rate(answer_text)
+            parsed_model_citations = parse_citations(answer_text)
+            model_citation_count = len(parsed_model_citations)
+            citation_resolution = resolve_citations(parsed_model_citations, citations)
+            verification = verify_answer(
+                answer_text=answer_text,
+                retrieved_rows=retrieved,
+                citation_report=citation_resolution,
+            )
+            verification_status = str(verification.get("verification_status") or "")
+            verification_reason = str(verification.get("short_reason") or "")
+            if (
+                force_citations
+                and int(citation_resolution.get("citations_total") or 0) > 0
+                and int(citation_resolution.get("citations_resolved") or 0) == 0
+            ):
+                verification_reason = "All cited IDs were not in allowlist / not retrieved."
+            cited_pages = sorted(
+                int(page)
+                for page in (citation_resolution.get("resolved_pages") or set())
+                if isinstance(page, int)
+            )
+            cited_ids = [
+                str(value)
+                for value in (citation_resolution.get("resolved_ids") or [])
+                if str(value).strip()
+            ]
             status = "ok"
             failure_reason: Optional[str] = None
             if generation_error is not None:
@@ -371,6 +461,17 @@ def run_eval(
                 "citation_rate": round(citation_rate, 4),
                 "citation_count": citation_count,
                 "citations": citation_rows,
+                "model_citations_total": int(citation_resolution.get("citations_total") or 0),
+                "citations_total": int(citation_resolution.get("citations_total") or 0),
+                "citations_resolved": int(citation_resolution.get("citations_resolved") or 0),
+                "citations_resolvable": bool(citation_resolution.get("citations_resolvable", False)),
+                "cited_pages": cited_pages,
+                "cited_ids": cited_ids,
+                "first_cited_rank": citation_resolution.get("first_cited_rank"),
+                "verification_status": verification_status,
+                "verification_reason": verification_reason,
+                "citation_repair_applied": bool(citation_repair_applied),
+                "citation_repair_success": bool(citation_repair_success),
                 "retrieved_ids": retrieved_ids,
                 "usage": usage,
                 "status": status,
@@ -393,13 +494,26 @@ def run_eval(
                     "id": query_id,
                     "query": query_text,
                     "citations": citation_rows,
+                    "citations_total": int(citation_resolution.get("citations_total") or 0),
+                    "citations_resolved": int(citation_resolution.get("citations_resolved") or 0),
+                    "citations_resolvable": bool(citation_resolution.get("citations_resolvable", False)),
+                    "cited_pages": cited_pages,
+                    "cited_ids": cited_ids,
+                    "first_cited_rank": citation_resolution.get("first_cited_rank"),
+                    "verification_status": verification_status,
+                    "verification_reason": verification_reason,
+                    "citation_repair_applied": bool(citation_repair_applied),
+                    "citation_repair_success": bool(citation_repair_success),
                     "retrieved_ids": retrieved_ids,
                 },
             )
 
             total_values.append(total_ms)
             answer_len_values.append(answer_len_chars)
-            citation_count_values.append(citation_count)
+            context_citation_count_values.append(citation_count)
+            model_citation_count_values.append(model_citation_count)
+            if verification_status == PASS:
+                verification_passes += 1
             progress_reporter.next_query()
     finally:
         progress_reporter.close()
@@ -412,13 +526,28 @@ def run_eval(
         "avg_answer_len_chars": round(sum(answer_len_values) / count_queries, 3)
         if count_queries
         else 0.0,
-        "avg_num_citations": round(sum(citation_count_values) / count_queries, 3)
+        "avg_context_citations_per_query": round(sum(context_citation_count_values) / count_queries, 3)
+        if count_queries
+        else 0.0,
+        "avg_model_citations_per_query": round(sum(model_citation_count_values) / count_queries, 3)
+        if count_queries
+        else 0.0,
+        # Backward-compatible alias; historical consumers may still read this key.
+        "avg_num_citations": round(sum(context_citation_count_values) / count_queries, 3)
+        if count_queries
+        else 0.0,
+        "percent_queries_with_any_context_citation": round(
+            (any_citation_count / count_queries) * 100.0, 3
+        )
         if count_queries
         else 0.0,
         "percent_queries_with_any_citation": round((any_citation_count / count_queries) * 100.0, 3)
         if count_queries
         else 0.0,
         "failed_queries": failed_queries,
+        "verification_pass_rate": round(verification_passes / count_queries, 4)
+        if count_queries
+        else 0.0,
     }
     if hit_pages_values:
         summary["hit@k_pages"] = round((sum(hit_pages_values) / len(hit_pages_values)) * 100.0, 3)
@@ -447,7 +576,11 @@ def run_eval(
                 "ollama_num_predict_auto": bool(gen_cfg.get("ollama_num_predict_auto", True)),
                 "max_context_chars": int(gen_cfg.get("max_context_chars", max_context_chars)),
                 "ollama_think": gen_cfg.get("ollama_think", False),
+                "force_citations": force_citations,
+                "citation_repair_retry": citation_repair_retry,
+                "citation_min_count": citation_min_count,
             },
+            "force_citations": force_citations,
         },
         "summary": summary,
         "queries": rows,
@@ -475,9 +608,13 @@ def _report_lines(results: Dict[str, Any]) -> List[str]:
         "avg_total_ms",
         "p50_total_ms",
         "avg_answer_len_chars",
+        "avg_context_citations_per_query",
+        "avg_model_citations_per_query",
         "avg_num_citations",
+        "percent_queries_with_any_context_citation",
         "percent_queries_with_any_citation",
         "failed_queries",
+        "verification_pass_rate",
         "hit@k_pages",
         "expected_pages_evaluable_queries",
     ):

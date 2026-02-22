@@ -16,6 +16,8 @@ from engines.paddleocr_engine import (
 from engines.vlm_hook import plan_vlm_jobs
 from engines.vlm_providers import build_vlm_provider, parse_ollama_think
 from bundle import bundle_run
+from citations import parse_citations, resolve_citations
+from compare_baseline import write_compare_report
 from eval_pack import load_queries, run_eval, write_reports
 from merge import merge_outputs
 from qdrant_ingest import (
@@ -24,12 +26,17 @@ from qdrant_ingest import (
     search_query,
 )
 from rag_preview import (
+    build_citation_repair_messages,
     build_context,
+    build_force_citation_allowlist,
     build_rag_messages,
     format_preview_output,
     generate_answer,
     write_rag_preview_ollama_failure_artifacts,
 )
+from retrieval_eval import run_retrieval_eval
+from reliability_pack import write_reliability_pack
+from verifier import PASS, verify_answer
 
 DEFAULT_BACKEND = "vllm"
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
@@ -72,6 +79,16 @@ def _parse_ollama_think_arg(value: object) -> bool | str:
         return parse_ollama_think(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
+def _resolve_citation_repair_retry(value: object, *, force_citations: bool) -> bool:
+    if value is None:
+        return bool(force_citations)
+    return bool(value)
+
+
+def _is_not_found_answer(answer_text: str) -> bool:
+    return str(answer_text or "").strip() == "NOT_FOUND"
 
 
 def _resolve_ollama_num_predict_cfg(
@@ -570,10 +587,20 @@ def _cmd_rag_preview(args: argparse.Namespace) -> int:
     context_text = str(context_payload.get("context_text") or "")
     citations = context_payload.get("citations") if isinstance(context_payload.get("citations"), list) else []
     require_json_response = False
+    force_citations = bool(args.force_citations)
+    citation_min_count = max(1, int(args.citation_min_count))
+    citation_repair_retry = _resolve_citation_repair_retry(
+        args.citation_repair_retry,
+        force_citations=force_citations,
+    )
+    allowed_citation_ids = build_force_citation_allowlist(citations) if force_citations else None
     messages = build_rag_messages(
         args.query,
         context_text,
         require_json_response=require_json_response,
+        force_citations=force_citations,
+        citation_min_count=citation_min_count,
+        allowed_citation_ids=allowed_citation_ids,
     )
     provider = build_vlm_provider(
         backend=args.backend,
@@ -616,11 +643,90 @@ def _cmd_rag_preview(args: argparse.Namespace) -> int:
                     f"{exc} (debug artifacts: {artifact_dir})"
                 ) from exc
         raise
+    citation_repair_applied = False
+    citation_repair_success = False
+    parsed_model_citations = parse_citations(answer_text)
+    if (
+        force_citations
+        and citation_repair_retry
+        and not _is_not_found_answer(answer_text)
+        and len(parsed_model_citations) < citation_min_count
+    ):
+        citation_repair_applied = True
+        repair_messages = build_citation_repair_messages(
+            query=args.query,
+            context_text=context_text,
+            original_answer=answer_text,
+            citation_min_count=citation_min_count,
+            allowed_citation_ids=allowed_citation_ids,
+        )
+        try:
+            repaired_answer_text, _repair_usage = generate_answer(
+                provider=provider,
+                messages=repair_messages,
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+                ollama_num_predict=tuned_num_predict,
+                ollama_retry_num_predict=tuned_retry_num_predict,
+                max_context_chars=args.max_context_chars,
+                ollama_num_predict_auto=args.ollama_num_predict_auto,
+                ollama_think=args.ollama_think,
+                fallback_citations=citations,
+                ollama_debug_hook=debug_hook,
+            )
+            repaired_text = str(repaired_answer_text or "").strip()
+            if repaired_text:
+                answer_text = repaired_text
+            parsed_model_citations = parse_citations(answer_text)
+            citation_repair_success = len(parsed_model_citations) >= citation_min_count
+        except Exception:
+            citation_repair_success = False
+    model_citation_report = resolve_citations(parsed_model_citations, citations)
+    verification = verify_answer(
+        answer_text=answer_text,
+        retrieved_rows=results,
+        citation_report=model_citation_report,
+    )
+    verification_status = str(verification.get("verification_status") or "")
+    verification_reason = str(verification.get("short_reason") or "")
+    if (
+        force_citations
+        and int(model_citation_report.get("citations_total") or 0) > 0
+        and int(model_citation_report.get("citations_resolved") or 0) == 0
+    ):
+        verification_reason = "All cited IDs were not in allowlist / not retrieved."
+    if args.require_resolvable_citations:
+        citations_total = int(model_citation_report.get("citations_total") or 0)
+        citations_resolvable = bool(model_citation_report.get("citations_resolvable"))
+        if citations_total == 0:
+            raise SystemExit("NO_CITATIONS: model output did not include citation markers.")
+        if not citations_resolvable:
+            raise SystemExit(
+                "UNRESOLVABLE_CITATIONS: one or more model citations do not map to retrieved context."
+            )
+    if verification_status != PASS:
+        print(
+            "Verification:\n"
+            f"- status: {verification_status}\n"
+            f"- reason: {verification_reason}"
+        )
+        if citation_repair_applied:
+            print(
+                f"- citation_repair_applied: {citation_repair_applied}\n"
+                f"- citation_repair_success: {citation_repair_success}"
+            )
+        if args.enforce_verified:
+            print(f"VERIFICATION_FAILED: {verification_status} - {verification_reason}")
+            return 2
+        safe_answer = str(verification.get("suggested_safe_answer") or "").strip()
+        if safe_answer:
+            answer_text = f"{answer_text.rstrip()}\n\nFallback: {safe_answer}".strip()
     print(
         format_preview_output(
             answer_text=answer_text,
             citations=citations,
             show_snippets=bool(args.show_snippets),
+            model_citations=model_citation_report,
         ),
         end="",
     )
@@ -670,6 +776,12 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         "ollama_api": args.ollama_api,
         "max_context_chars": args.max_context_chars,
         "ollama_think": args.ollama_think,
+        "force_citations": bool(args.force_citations),
+        "citation_repair_retry": _resolve_citation_repair_retry(
+            args.citation_repair_retry,
+            force_citations=bool(args.force_citations),
+        ),
+        "citation_min_count": max(1, int(args.citation_min_count)),
     }
 
     results = run_eval(
@@ -694,6 +806,80 @@ def _cmd_eval(args: argparse.Namespace) -> int:
     print(
         f"summary queries={count_queries} avg_total_ms={avg_total_ms} "
         f"avg_num_citations={avg_num_citations}"
+    )
+    return 0
+
+
+def _cmd_retrieval_eval(args: argparse.Namespace) -> int:
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    queries = load_queries(args.queries)
+    content_types = _parse_content_types(args.content_types)
+
+    report = run_retrieval_eval(
+        queries=queries,
+        qdrant_url=args.qdrant_url,
+        collection=args.collection,
+        top_k=args.top_k,
+        content_types=content_types,
+        output_dir=out_dir,
+        queries_path=args.queries,
+        repeat=args.repeat,
+        seed=args.seed,
+        progress=args.progress,
+    )
+
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    report_path = out_dir / "retrieval_report.json"
+    print(f"Retrieval evaluation report: {report_path}")
+    print(
+        "summary "
+        f"queries={summary.get('count_queries', 0)} "
+        f"hit_rate@k={summary.get('hit_rate@k', 0)} "
+        f"avg_page_recall@k={summary.get('avg_page_recall@k', 0)} "
+        f"mrr={summary.get('mrr', 0)}"
+    )
+    return 0
+
+
+def _cmd_reliability_pack(args: argparse.Namespace) -> int:
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    report = write_reliability_pack(
+        retrieval_report_path=args.retrieval_report,
+        eval_report_path=args.eval_report,
+        output_dir=out_dir,
+    )
+    print(f"Reliability report: {out_dir / 'reliability_report.json'}")
+    print(
+        "summary "
+        f"reliability_score={report.get('reliability_score', 0)} "
+        f"meets_gate={report.get('meets_gate', False)} "
+        f"recommendation={report.get('recommendation', '')}"
+    )
+    return 0
+
+
+def _cmd_compare_baseline(args: argparse.Namespace) -> int:
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    report = write_compare_report(
+        baseline_report_path=args.baseline,
+        current_report_path=args.current,
+        output_dir=out_dir,
+        thresholds={
+            "reliability_score_drop_max": args.max_reliability_score_drop,
+            "hit_rate_at_k_drop_max": args.max_hit_rate_drop,
+            "mrr_drop_max": args.max_mrr_drop,
+            "verification_pass_rate_drop_max": args.max_verification_pass_rate_drop,
+        },
+    )
+    print(f"Baseline comparison report: {out_dir / 'compare_report.json'}")
+    print(
+        "summary "
+        f"verdict={report.get('verdict', '')} "
+        f"current_meets_gate={report.get('current', {}).get('meets_gate', False)} "
+        f"regression_failures={len(report.get('regression_failures', []))}"
     )
     return 0
 
@@ -1396,6 +1582,48 @@ def build_parser() -> argparse.ArgumentParser:
         help="Include retrieved snippets in output (default false)",
     )
     rag_preview.add_argument(
+        "--require_resolvable_citations",
+        default=False,
+        type=_parse_bool,
+        help=(
+            "Fail when model citations are missing or cannot be resolved to retrieved context "
+            "(default false)"
+        ),
+    )
+    rag_preview.add_argument(
+        "--enforce_verified",
+        default=False,
+        type=_parse_bool,
+        help=(
+            "Fail when additive verifier status is not PASS (default false). "
+            "When false, a safe fallback sentence is appended."
+        ),
+    )
+    rag_preview.add_argument(
+        "--force_citations",
+        default=False,
+        type=_parse_bool,
+        help=(
+            "Force citation markers in generated answers via strict prompt policy "
+            "(default false)"
+        ),
+    )
+    rag_preview.add_argument(
+        "--citation_repair_retry",
+        default=None,
+        type=_parse_bool,
+        help=(
+            "Run one citation-repair retry when citations are below minimum. "
+            "Default true when --force_citations=true, else false."
+        ),
+    )
+    rag_preview.add_argument(
+        "--citation_min_count",
+        type=int,
+        default=1,
+        help="Minimum citation markers required when --force_citations=true (default 1)",
+    )
+    rag_preview.add_argument(
         "--timeout_s",
         type=int,
         default=30,
@@ -1564,6 +1792,30 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     eval_cmd.add_argument(
+        "--force_citations",
+        default=False,
+        type=_parse_bool,
+        help=(
+            "Force citation markers in eval answers via strict prompt policy "
+            "(default false)"
+        ),
+    )
+    eval_cmd.add_argument(
+        "--citation_repair_retry",
+        default=None,
+        type=_parse_bool,
+        help=(
+            "Run one citation-repair retry when citations are below minimum. "
+            "Default true when --force_citations=true, else false."
+        ),
+    )
+    eval_cmd.add_argument(
+        "--citation_min_count",
+        type=int,
+        default=1,
+        help="Minimum citation markers required when --force_citations=true (default 1)",
+    )
+    eval_cmd.add_argument(
         "--timeout_s",
         type=int,
         default=30,
@@ -1576,6 +1828,122 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show per-query eval progress (default true)",
     )
     eval_cmd.set_defaults(func=_cmd_eval)
+
+    retrieval_eval = subparsers.add_parser(
+        "retrieval-eval",
+        help="Run retrieval-only evaluation (no generation) against truth pages",
+    )
+    retrieval_eval.add_argument("--queries", required=True, help="Path to query JSON/YAML file")
+    retrieval_eval.add_argument("--out", required=True, help="Output directory for retrieval report")
+    retrieval_eval.add_argument(
+        "--qdrant_url",
+        default="http://127.0.0.1:6333",
+        help="Qdrant HTTP URL (default http://127.0.0.1:6333)",
+    )
+    retrieval_eval.add_argument(
+        "--collection",
+        default="bookmind_bench",
+        help="Qdrant collection name (default bookmind_bench)",
+    )
+    retrieval_eval.add_argument(
+        "--top_k",
+        type=int,
+        default=20,
+        help="Number of retrieved chunks per query (default 20)",
+    )
+    retrieval_eval.add_argument(
+        "--content_types",
+        default="text,figure_caption",
+        help="Comma-separated filter (default text,figure_caption)",
+    )
+    retrieval_eval.add_argument(
+        "--progress",
+        default=True,
+        type=_parse_bool,
+        help="Show per-query retrieval progress (default true)",
+    )
+    retrieval_eval.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="Repeat retrieval N times per query for stability stats (default 1)",
+    )
+    retrieval_eval.add_argument(
+        "--seed",
+        type=int,
+        required=False,
+        help="Optional seed for deterministic shuffling if used",
+    )
+    retrieval_eval.set_defaults(func=_cmd_retrieval_eval)
+
+    reliability_pack = subparsers.add_parser(
+        "reliability-pack",
+        help="Compose retrieval + eval reports into a single reliability gate artifact",
+    )
+    reliability_pack.add_argument(
+        "--retrieval_report",
+        required=True,
+        help="Path to retrieval_report.json from retrieval-eval",
+    )
+    reliability_pack.add_argument(
+        "--eval_report",
+        required=True,
+        help="Path to eval report.json from eval output",
+    )
+    reliability_pack.add_argument(
+        "--out",
+        required=True,
+        help="Output directory for reliability_report.json",
+    )
+    reliability_pack.set_defaults(func=_cmd_reliability_pack)
+
+    compare_baseline = subparsers.add_parser(
+        "compare-baseline",
+        help="Compare current reliability report against a baseline with regression thresholds",
+    )
+    compare_baseline.add_argument(
+        "--baseline",
+        required=True,
+        help="Path to baseline reliability_report.json",
+    )
+    compare_baseline.add_argument(
+        "--current",
+        required=True,
+        help="Path to current reliability_report.json",
+    )
+    compare_baseline.add_argument(
+        "--out",
+        required=True,
+        help="Output directory for compare_report.json",
+    )
+    compare_baseline.add_argument(
+        "--max_reliability_score_drop",
+        type=float,
+        default=5.0,
+        help="Fail regression if reliability_score drop is greater than this value (default 5.0)",
+    )
+    compare_baseline.add_argument(
+        "--max_verification_pass_rate_drop",
+        type=float,
+        default=0.05,
+        help=(
+            "Fail regression if verification_pass_rate drop is greater than this value "
+            "(default 0.05)"
+        ),
+    )
+    compare_baseline.add_argument(
+        "--max_hit_rate_drop",
+        type=float,
+        default=0.05,
+        help="Fail regression if hit_rate@k drop is greater than this value (default 0.05)",
+    )
+    compare_baseline.add_argument(
+        "--max_mrr_drop",
+        type=float,
+        default=0.05,
+        help="Fail regression if mrr drop is greater than this value (default 0.05)",
+    )
+    compare_baseline.set_defaults(func=_cmd_compare_baseline)
 
     ollama_debug = subparsers.add_parser(
         "ollama-debug",

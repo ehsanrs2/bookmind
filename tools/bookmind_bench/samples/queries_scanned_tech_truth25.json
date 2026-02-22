@@ -1,0 +1,77 @@
+[
+  {
+    "id": "q1_title_scope",
+    "query": "What is the title or main subject of this document?",
+    "truth_pages": [
+      1,
+      2
+    ],
+    "truth_note": "Page 2 contains the document title string and page 1 provides the main subject heading for the standby magnetic compass."
+  },
+  {
+    "id": "q2_overview",
+    "query": "Summarize the system overview in 3 concise bullet points.",
+    "truth_page_ranges": [
+      [
+        3,
+        5
+      ]
+    ],
+    "truth_note": "The system overview content is spread across Figure 6 and air-data/circuit description text spanning pages 3 through 5."
+  },
+  {
+    "id": "q3_parts_list",
+    "query": "List the key components or parts mentioned for the setup.",
+    "truth_page_ranges": [
+      [
+        1,
+        4
+      ]
+    ],
+    "truth_note": "Component/parts lists appear in the figure captions and labels on pages 1 to 4."
+  },
+  {
+    "id": "q4_pin_assignments",
+    "query": "Are there any pin assignments or connector mappings in the text or tables?",
+    "truth_pages": [
+      4,
+      5
+    ],
+    "truth_note": "Connector/line mapping evidence appears in pressure-line mapping and terminal/probe connection text on pages 4 and 5."
+  },
+  {
+    "id": "q5_table_values",
+    "query": "Extract any table-style values, limits, or parameter settings if present.",
+    "truth_pages": [
+      5
+    ],
+    "truth_note": "Numeric limits and parameter settings (for example Tt, TAS, and M test values) are explicitly present on page 5."
+  },
+  {
+    "id": "q6_block_diagram",
+    "query": "Explain the block diagram and how the modules connect.",
+    "truth_pages": [
+      3,
+      4
+    ],
+    "truth_note": "Block/connection structure is described by the angle-of-attack system figure and the pressure-connection diagram on pages 3 and 4."
+  },
+  {
+    "id": "q7_circuit_wiring",
+    "query": "Describe the circuit wiring and signal flow shown in the figure.",
+    "truth_pages": [
+      4,
+      5
+    ],
+    "truth_note": "Signal-flow and wiring details are concentrated in the air-data caption and channel circuit text on pages 4 and 5."
+  },
+  {
+    "id": "q8_calibration_figure",
+    "query": "From the figure or schematic, what calibration steps are illustrated?",
+    "truth_pages": [
+      1,
+      5
+    ],
+    "truth_note": "Calibration-related figure cues are on page 1 (compass adjustment context) and page 5 (explicit channel testing/calibration values)."
+  }
+]

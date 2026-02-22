@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import requests
 
+from citations import parse_citations, resolve_citations
 from engines.vlm_providers import (
     OllamaGenerateProvider,
     OllamaProvider,
@@ -31,6 +32,7 @@ OLLAMA_RETRY_SYSTEM_PROMPT = (
     'JSON shape: {"answer":"...","citations":[{"page":1,"stable_id":"..."}]}. '
     "No markdown or extra keys."
 )
+FORCE_CITATIONS_ALLOWLIST_MAX_IDS = 30
 
 
 def _truncate_text(value: str, limit: int) -> str:
@@ -73,6 +75,8 @@ def build_context(results: Sequence[Dict[str, Any]], max_chars: int = 6000) -> D
 
     for rank, row in enumerate(results, start=1):
         stable_id = str(row.get("stable_id") or row.get("id") or "")
+        # TODO: migrate visible citation contract from [page:stable_id] to [source_id:chunk_id].
+        chunk_id = str(row.get("chunk_id") or "")
         page = _to_int(row.get("page"))
         content_type = str(row.get("content_type") or "unknown")
         bbox = row.get("bbox") if isinstance(row.get("bbox"), list) else None
@@ -97,6 +101,7 @@ def build_context(results: Sequence[Dict[str, Any]], max_chars: int = 6000) -> D
             {
                 "rank": rank,
                 "stable_id": stable_id,
+                "chunk_id": chunk_id,
                 "page": page,
                 "content_type": content_type,
                 "bbox": bbox,
@@ -131,8 +136,62 @@ def _rag_user_instructions_json() -> str:
     )
 
 
-def _rag_user_instructions_text() -> str:
+def _force_citation_instruction(citation_min_count: int) -> str:
+    min_count = max(1, int(citation_min_count))
     return (
+        "Your answer MUST include citation markers in brackets.\n"
+        "Use one of: [page:stable_id], [page:chunk_id], "
+        "[page:<int>, stable_id:<...>], [page:<int>, chunk_id:<v1_...>].\n"
+        f"Include at least {min_count} citation(s).\n"
+        "If the context does not contain the answer, reply exactly: NOT_FOUND."
+    )
+
+
+def build_force_citation_allowlist(
+    retrieved_rows: Sequence[Dict[str, Any]],
+    *,
+    max_ids: int = FORCE_CITATIONS_ALLOWLIST_MAX_IDS,
+) -> List[str]:
+    """Build a rank-ordered allowlist of citation IDs from retrieved rows."""
+    if max_ids <= 0:
+        return []
+    allowlist: List[str] = []
+    seen: set[str] = set()
+    for row in retrieved_rows:
+        if not isinstance(row, dict):
+            continue
+        preferred = str(row.get("chunk_id") or "").strip()
+        if not preferred:
+            preferred = str(row.get("stable_id") or row.get("id") or "").strip()
+        if not preferred or preferred in seen:
+            continue
+        seen.add(preferred)
+        allowlist.append(preferred)
+        if len(allowlist) >= max_ids:
+            break
+    return allowlist
+
+
+def _force_citation_allowlist_text(allowed_citation_ids: Sequence[str]) -> str:
+    cleaned = [str(item).strip() for item in allowed_citation_ids if str(item).strip()]
+    if not cleaned:
+        return ""
+    return (
+        "Allowed citation IDs (use ONLY these): "
+        f"{', '.join(cleaned)}\n"
+        "IDs are case-sensitive and must be copied exactly.\n"
+        "Every citation marker MUST use an ID from the allowlist above.\n"
+        "Do not invent IDs. If you cannot cite using allowed IDs, reply exactly: NOT_FOUND."
+    )
+
+
+def _rag_user_instructions_text(
+    *,
+    force_citations: bool = False,
+    citation_min_count: int = 1,
+    allowed_citation_ids: Optional[Sequence[str]] = None,
+) -> str:
+    base = (
         "Instructions:\n"
         "- Answer using only the provided context.\n"
         "- If the context is insufficient, explicitly say the context is insufficient.\n"
@@ -140,6 +199,13 @@ def _rag_user_instructions_text() -> str:
         "- Then optionally provide brief bullet details.\n"
         "- Include citations in the form [page:stable_id]."
     )
+    if not force_citations:
+        return base
+    allowlist_text = _force_citation_allowlist_text(allowed_citation_ids or [])
+    force_block = _force_citation_instruction(citation_min_count)
+    if allowlist_text:
+        force_block = f"{force_block}\n{allowlist_text}"
+    return f"{base}\n- {force_block}"
 
 
 def build_rag_messages(
@@ -147,6 +213,9 @@ def build_rag_messages(
     context_text: str,
     *,
     require_json_response: bool = False,
+    force_citations: bool = False,
+    citation_min_count: int = 1,
+    allowed_citation_ids: Optional[Sequence[str]] = None,
 ) -> List[Dict[str, str]]:
     user_content = (
         "User query:\n"
@@ -155,7 +224,41 @@ def build_rag_messages(
         "```\n"
         f"{context_text.strip()}\n"
         "```\n\n"
-        f"{_rag_user_instructions_json() if require_json_response else _rag_user_instructions_text()}"
+        f"{_rag_user_instructions_json() if require_json_response else _rag_user_instructions_text(force_citations=force_citations, citation_min_count=citation_min_count, allowed_citation_ids=allowed_citation_ids)}"
+    )
+    return [
+        {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
+        {"role": "user", "content": user_content},
+    ]
+
+
+def build_citation_repair_messages(
+    *,
+    query: str,
+    context_text: str,
+    original_answer: str,
+    citation_min_count: int = 1,
+    allowed_citation_ids: Optional[Sequence[str]] = None,
+) -> List[Dict[str, str]]:
+    allowlist_text = _force_citation_allowlist_text(allowed_citation_ids or [])
+    allowlist_hint = (
+        "\nUse ONLY allowed citation IDs listed in the context. Do not invent."
+        if allowlist_text
+        else ""
+    )
+    user_content = (
+        "User query:\n"
+        f"{query.strip()}\n\n"
+        "Retrieved context:\n"
+        "```\n"
+        f"{context_text.strip()}\n"
+        "```\n\n"
+        "Previous answer (needs citation repair):\n"
+        f"{str(original_answer or '').strip()}\n\n"
+        "Rewrite the answer to include the required citation markers using ONLY the provided context. "
+        "Do not add new claims. Keep it concise.\n"
+        f"{_force_citation_instruction(citation_min_count)}{allowlist_hint}"
+        f"{f'\n{allowlist_text}' if allowlist_text else ''}"
     )
     return [
         {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
@@ -1029,10 +1132,19 @@ def generate_answer(
     raise TypeError(f"Unsupported provider type for RAG preview: {type(provider)!r}")
 
 
+def build_model_citation_report(
+    answer_text: str,
+    retrieved_rows: Sequence[Dict[str, Any]],
+) -> Dict[str, Any]:
+    parsed = parse_citations(answer_text)
+    return resolve_citations(parsed, retrieved_rows)
+
+
 def format_preview_output(
     answer_text: str,
     citations: Sequence[Dict[str, Any]],
     show_snippets: bool = False,
+    model_citations: Optional[Dict[str, Any]] = None,
 ) -> str:
     lines: List[str] = []
     lines.append("Answer")
@@ -1061,6 +1173,28 @@ def format_preview_output(
                     lines.append(
                         f"  figure_ref crop_image={crop_image} page_image={page_image}"
                     )
+
+    report = model_citations if isinstance(model_citations, dict) else {}
+    lines.append("")
+    lines.append("Model citations")
+    lines.append("===============")
+    lines.append(f"- citations_total={report.get('citations_total', 0)}")
+    lines.append(f"- citations_resolved={report.get('citations_resolved', 0)}")
+    lines.append(f"- citations_resolvable={bool(report.get('citations_resolvable', False))}")
+    unresolved = report.get("citations_unresolved")
+    unresolved_list = unresolved if isinstance(unresolved, list) else []
+    if not unresolved_list:
+        lines.append("- unresolved=(none)")
+    else:
+        lines.append("- unresolved:")
+        for item in unresolved_list[:5]:
+            if isinstance(item, dict):
+                raw = str(item.get("raw") or "")
+            else:
+                raw = str(item)
+            lines.append(f"  - {raw[:140]}")
+        if len(unresolved_list) > 5:
+            lines.append(f"  - ... +{len(unresolved_list) - 5} more")
 
     if show_snippets:
         lines.append("")

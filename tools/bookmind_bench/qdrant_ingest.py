@@ -158,8 +158,13 @@ def _build_payload(record: Dict[str, Any], run_dir: str, bundle_relpath: str) ->
     payload_meta["run_dir"] = run_dir
     payload_meta["bundle_relpath"] = bundle_relpath
     return {
+        "document_id": record.get("document_id"),
+        "source_id": record.get("source_id"),
+        "chunk_id": record.get("chunk_id"),
         "stable_id": record.get("stable_id"),
         "page": record.get("page"),
+        "page_index": record.get("page_index"),
+        "region_index": record.get("region_index"),
         "bbox": record.get("bbox"),
         "content_type": record.get("content_type"),
         "text": record.get("text"),
@@ -431,6 +436,7 @@ def search_query(
                 "id": hit.id,
                 "score": float(hit.score),
                 "stable_id": payload.get("stable_id"),
+                "chunk_id": payload.get("chunk_id"),
                 "page": payload.get("page"),
                 "bbox": payload.get("bbox"),
                 "content_type": payload.get("content_type"),
