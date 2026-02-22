@@ -134,7 +134,8 @@ Scope: `tools/bookmind_bench/*` bench retrieval path (extract -> normalize -> bu
   - ID determinism,
   - schema validation,
   - retrieval round-trip mapping,
-  - citation parse/validation for `rag-preview` and `eval`.
+  - citation parse/validation for `rag-preview` and `eval`,
+  - additive verifier status coverage (`PASS`, no-citation, unresolvable-citation, unsupported-claims). (Implemented 2026-02-20)
 - On a representative scanned technical PDF sample:
   - non-empty retrieval results for text/table/figure queries,
   - citations resolve to real stored chunks/pages,
@@ -145,3 +146,106 @@ Scope: `tools/bookmind_bench/*` bench retrieval path (extract -> normalize -> bu
 No.
 
 Rationale: the current pipeline already has the core retrieval spine (normalized records, deterministic row identity, embedding, vector ingest, retrieval, citation-bearing context). The gap is mainly contract hardening and identity alignment (`document_id/source_id/chunk_id`), not a fundamental architecture rewrite. A targeted contract-evolution pass is lower risk and should be done before any large redesign.
+
+## Canonical Identity Contract Implemented
+
+### What changed
+
+- `merge.py::_build_ingest_record` now emits canonical identity fields:
+  - `document_id`: deterministic hash of normalized absolute merge source path.
+  - `source_id`: alias of `document_id` (current compatibility mode).
+  - `chunk_id`: deterministic versioned identity (`v1_` prefix).
+- Merge output rows now include explicit ordering metadata:
+  - `page_index` (1-based, same as `page`)
+  - `region_index` (deterministic within-page order from sorted row keys)
+  - `reading_order` (currently same as `region_index`)
+- `qdrant_ingest.py::_build_payload` now includes:
+  - `document_id`, `source_id`, `chunk_id`, `page_index`, `region_index`
+  - Existing `stable_id` remains unchanged.
+- `rag_preview.py::build_context` keeps user-visible citation format `[page:stable_id]`, and now also carries `chunk_id` in citation rows for internal migration readiness.
+
+### Why redesign was avoided
+
+- Retrieval ranking/embedding/search logic remains unchanged.
+- Ingestion pipeline stages and data flow remain unchanged.
+- Changes are additive and contract-focused; no architecture rewrite was introduced.
+
+### Definition of Done items 1-4 satisfied
+
+1. Canonical identity fields are present on merged rows and in Qdrant payloads.
+2. Determinism is covered by tests for `document_id` and versioned `chunk_id`.
+3. Ordering metadata is explicit and deterministic (`page_index`, `region_index`, `reading_order`).
+4. Qdrant payload round-trip metadata now carries canonical identity alongside compatibility `stable_id`.
+
+## Additive Verifier Implemented
+
+- Added post-generation verifier stage (`tools/bookmind_bench/verifier.py`) for:
+  - citation presence checks,
+  - citation resolvability checks against retrieved context,
+  - conservative grounding-overlap checks against retrieved text.
+- Wired in `rag-preview` as an additive gate:
+  - prints verification status/reason on failures,
+  - optional enforcement via `--enforce_verified true` returns non-zero.
+- Wired in `eval` reports:
+  - per-query `verification_status` and `verification_reason`,
+  - aggregate `verification_pass_rate`.
+- Retrieval and generation prompts remain unchanged; retrieval ranking logic unchanged.
+
+### Model citation format contract (accepted by parser)
+
+Model-answer citation parsing accepts all of the following:
+- `[page:stable_id]` (legacy)
+- `[page:v1_chunk_id]` (legacy)
+- `[source_id:v1_chunk_id]` (legacy)
+- `[page:<stable_or_chunk_id>]` where chunk ids start with `v1_`
+- `[page:<int>, stable_id:<hex_or_id>]`
+- `[page:<int>, chunk_id:<v1_...>]`
+- `[stable_id:<hex_or_id>]`
+- `[chunk_id:<v1_...>]`
+
+Reporting distinction in eval artifacts:
+- Context citation counts come from retrieved rows added to prompt context.
+- Model citation counts/resolution come from parsed model answer markers and are used by verifier status.
+
+## Retrieval-only Evaluation Gate
+
+To evaluate retrieval quality independently of model generation, use:
+- `bookmind-bench retrieval-eval`
+
+This gate computes page-level metrics from Qdrant retrieval only (no LLM call):
+- `page_hit@k` (per query boolean)
+- `page_recall@k` (per query recall on truth pages)
+- `mrr` (reciprocal rank of first truth-page hit)
+
+Query files can include optional truth fields:
+- `truth_pages: [12, 13]`
+- `truth_page_ranges: [[44,45]]` (inclusive)
+
+Ranges are expanded and unioned with `truth_pages` before scoring.
+
+Suggested starting threshold for scanned technical PDFs (not a hard rule):
+- `Hit@20 >= 0.85`
+- `MRR >= 0.35`
+
+Example commands for ablation:
+
+```bash
+bookmind-bench retrieval-eval \
+  --queries tools/bookmind_bench/samples/queries_scanned_tech.json \
+  --out runs/retrieval_eval_text \
+  --content_types text
+```
+
+```bash
+bookmind-bench retrieval-eval \
+  --queries tools/bookmind_bench/samples/queries_scanned_tech.json \
+  --out runs/retrieval_eval_caption \
+  --content_types figure_caption
+```
+
+```bash
+bookmind-bench retrieval-eval \
+  --queries tools/bookmind_bench/samples/queries_scanned_tech.json \
+  --out runs/retrieval_eval_mixed \
+  --content_types text,figure_caption
+```

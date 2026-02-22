@@ -1,0 +1,40 @@
+{
+  "metadata": {
+    "generated_at_utc": "2026-02-20T22:20:30.806513+00:00",
+    "retrieval_report_path": "/tmp/bookmind_e2e_baseline_20260220_sample1-5/retrieval_eval/retrieval_report.json",
+    "eval_report_path": "/tmp/bookmind_e2e_baseline_20260220_sample1-5/eval/report.json"
+  },
+  "retrieval_summary": {
+    "hit_rate@k": 0.96,
+    "mrr": 0.87804,
+    "avg_page_recall@k": 0.96,
+    "stability": null
+  },
+  "generation_quality_summary": {
+    "citations_resolvable_rate": 1.0,
+    "avg_citations_per_answer": 8.0,
+    "verification_pass_rate": 0.0,
+    "verification_status_counts": {
+      "FAIL_NO_CITATIONS": 50
+    }
+  },
+  "score_components": {
+    "weights": {
+      "retrieval": 0.45,
+      "verification": 0.35,
+      "citations": 0.2
+    },
+    "retrieval_component": 0.91902,
+    "verification_component": 0.0,
+    "citations_component": 1.0
+  },
+  "thresholds": {
+    "hit_rate_at_20_min": 0.85,
+    "mrr_min": 0.35,
+    "verification_pass_rate_min": 0.8,
+    "citations_resolvable_rate_min": 0.9
+  },
+  "reliability_score": 61.356,
+  "meets_gate": false,
+  "recommendation": "INVESTIGATE_VERIFIER"
+}
