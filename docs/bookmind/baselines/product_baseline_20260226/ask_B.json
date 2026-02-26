@@ -1,0 +1,188 @@
+{
+  "query": "Summarize how angle-of-attack and air data topics connect across sections.",
+  "final_answer": "FINAL ANSWER: Angle-of-attack (AoA) systems integrate with air data systems through shared components like the air data cone (131), which processes raw air data from the radar nose cone (175) to generate the true AoA signal, incorporating Mach number-dependent corrections [page:3][page:5]. Both systems are interconnected in troubleshooting procedures to locate failed components [page:3]. Air data corrections (e.g., Mach number variations) directly influence the true AoA calculation from the local AoA probe signal [page:5].\n\n- Air data cone (131) receives and processes raw air data from radar nose cone (175) for AoA generation [page:3].\n- True AoA is derived from local AoA probe data with Mach number corrections (i\u2080 and K) [page:5].\n- Troubleshooting procedures apply to both systems to identify component failures [page:3].\nSources: [56e366c6034b00b2]",
+  "status": "PASS",
+  "verification_status": "PASS",
+  "verification_reason": "Citations resolve and grounding overlap is sufficient (6/10).",
+  "citations_total": 1,
+  "citations_resolved": 1,
+  "citations_resolvable": true,
+  "cited_pages": [
+    3
+  ],
+  "cited_ids": [
+    "56e366c6034b00b2"
+  ],
+  "first_cited_rank": 1,
+  "retrieved_rows": [
+    {
+      "rank": 1,
+      "score": 0.48683095,
+      "page": 3,
+      "stable_id": "56e366c6034b00b2",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 2,
+      "score": 0.47080103,
+      "page": 3,
+      "stable_id": "cbb49ca678a6927d",
+      "chunk_id": "",
+      "content_type": "figure_caption"
+    },
+    {
+      "rank": 3,
+      "score": 0.4681211,
+      "page": 3,
+      "stable_id": "eccaa0b4dc013ba6",
+      "chunk_id": "v1_cfcd9359f220a2b787a36ffe5e2d6dcdb6757173",
+      "content_type": "text"
+    },
+    {
+      "rank": 4,
+      "score": 0.44297618,
+      "page": 5,
+      "stable_id": "1b8cf549e856f68c",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 5,
+      "score": 0.43951777,
+      "page": 5,
+      "stable_id": "436ceb626a35cd5b",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 6,
+      "score": 0.39808315,
+      "page": 5,
+      "stable_id": "e3ddc604a4d12c28",
+      "chunk_id": "v1_e03e6ed6b17642c9d7785d8d4545c132c0bd7e20",
+      "content_type": "text"
+    },
+    {
+      "rank": 7,
+      "score": 0.38341397,
+      "page": 3,
+      "stable_id": "18669342f77e3ed3",
+      "chunk_id": "v1_5b17a99e1f9a63533969704bd4d7235debd775a6",
+      "content_type": "text"
+    },
+    {
+      "rank": 8,
+      "score": 0.35706818,
+      "page": 5,
+      "stable_id": "edaec21a2c88d42a",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 9,
+      "score": 0.35706818,
+      "page": 5,
+      "stable_id": "d120dfccd3b8f6cb",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 10,
+      "score": 0.35659826,
+      "page": 5,
+      "stable_id": "4c96e0439cf75c7e",
+      "chunk_id": "v1_63770534f0aac5a5a940be57eba05966ea4457e6",
+      "content_type": "text"
+    },
+    {
+      "rank": 11,
+      "score": 0.323833,
+      "page": 5,
+      "stable_id": "8934d4f16c3a3c14",
+      "chunk_id": "v1_ed9486333327745de5f89448b31ba9789140caa2",
+      "content_type": "text"
+    },
+    {
+      "rank": 12,
+      "score": 0.3086317,
+      "page": 5,
+      "stable_id": "d236bff03b092dbc",
+      "chunk_id": "v1_b48b1ff06d61c10ffc8034a95b06500877f06062",
+      "content_type": "text"
+    },
+    {
+      "rank": 13,
+      "score": 0.30849686,
+      "page": 4,
+      "stable_id": "3debb46fff0b981e",
+      "chunk_id": "",
+      "content_type": "figure_caption"
+    },
+    {
+      "rank": 14,
+      "score": 0.30104494,
+      "page": 5,
+      "stable_id": "cd3ea38db950eaa6",
+      "chunk_id": "v1_3eb623c09e53a87105810e61594249df98d67b1f",
+      "content_type": "text"
+    },
+    {
+      "rank": 15,
+      "score": 0.28957182,
+      "page": 5,
+      "stable_id": "d199173bebf01e21",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 16,
+      "score": 0.28268355,
+      "page": 5,
+      "stable_id": "24e93ad13ad6f0cb",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 17,
+      "score": 0.27868444,
+      "page": 5,
+      "stable_id": "ae365497547a38a3",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 18,
+      "score": 0.2782308,
+      "page": 5,
+      "stable_id": "cba24373c015c187",
+      "chunk_id": "v1_14fe03d9111ff96ea9a79f15256dad87e081a739",
+      "content_type": "text"
+    },
+    {
+      "rank": 19,
+      "score": 0.27351567,
+      "page": 5,
+      "stable_id": "fb43d8f688e6fb59",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 20,
+      "score": 0.27348715,
+      "page": 5,
+      "stable_id": "8164bade90c7f2d1",
+      "chunk_id": "v1_869e3b744f47fa28a150f0c53073d76764d2e704",
+      "content_type": "text"
+    }
+  ],
+  "config": {
+    "top_k": 20,
+    "content_types": [
+      "text",
+      "figure_caption"
+    ],
+    "backend": "ollama",
+    "force_citations": true
+  }
+}

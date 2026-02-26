@@ -1,0 +1,189 @@
+{
+  "query": "What output does the standby magnetic compass provide?",
+  "final_answer": "FINAL ANSWER  \nThe standby magnetic compass provides magnetic heading (direction relative to magnetic north) via the needle aligning with the local magnetic field.  \n\n- It displays the aircraft's magnetic heading using a rotating needle on a dial marked with degrees and cardinal directions [page:1, stable_id:10ad72b0f4bf71b9].  \n- The dial includes degree markings (e.g., 30\u00b0 increments) and a cardinal indicator (N) for reference [page:1, stable_id:dbf3ecf3a5add564].",
+  "status": "PASS",
+  "verification_status": "PASS",
+  "verification_reason": "Citations resolve and grounding overlap is sufficient (9/10).",
+  "citations_total": 2,
+  "citations_resolved": 2,
+  "citations_resolvable": true,
+  "cited_pages": [
+    1
+  ],
+  "cited_ids": [
+    "10ad72b0f4bf71b9",
+    "dbf3ecf3a5add564"
+  ],
+  "first_cited_rank": 2,
+  "retrieved_rows": [
+    {
+      "rank": 1,
+      "score": 0.76983714,
+      "page": 1,
+      "stable_id": "52f5d5782bbca3fe",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 2,
+      "score": 0.66789114,
+      "page": 1,
+      "stable_id": "10ad72b0f4bf71b9",
+      "chunk_id": "",
+      "content_type": "figure_caption"
+    },
+    {
+      "rank": 3,
+      "score": 0.61925447,
+      "page": 1,
+      "stable_id": "dbf3ecf3a5add564",
+      "chunk_id": "",
+      "content_type": "figure_caption"
+    },
+    {
+      "rank": 4,
+      "score": 0.5357094,
+      "page": 1,
+      "stable_id": "b3518ad62222f744",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 5,
+      "score": 0.5246682,
+      "page": 1,
+      "stable_id": "8ab88a65753fe5a8",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 6,
+      "score": 0.36669415,
+      "page": 5,
+      "stable_id": "24e93ad13ad6f0cb",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 7,
+      "score": 0.3472445,
+      "page": 2,
+      "stable_id": "fb3a10c46e1922cc",
+      "chunk_id": "",
+      "content_type": "figure_caption"
+    },
+    {
+      "rank": 8,
+      "score": 0.34723005,
+      "page": 4,
+      "stable_id": "2717bb5b8dd7e7da",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 9,
+      "score": 0.33208874,
+      "page": 5,
+      "stable_id": "e9243547fe9ba881",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 10,
+      "score": 0.3274136,
+      "page": 5,
+      "stable_id": "e713a3babfb056aa",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 11,
+      "score": 0.3205378,
+      "page": 2,
+      "stable_id": "302b8d7d2330fb62",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 12,
+      "score": 0.31883794,
+      "page": 5,
+      "stable_id": "cba24373c015c187",
+      "chunk_id": "v1_14fe03d9111ff96ea9a79f15256dad87e081a739",
+      "content_type": "text"
+    },
+    {
+      "rank": 13,
+      "score": 0.29500437,
+      "page": 5,
+      "stable_id": "d236bff03b092dbc",
+      "chunk_id": "v1_b48b1ff06d61c10ffc8034a95b06500877f06062",
+      "content_type": "text"
+    },
+    {
+      "rank": 14,
+      "score": 0.2932625,
+      "page": 5,
+      "stable_id": "47382f09e3037492",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 15,
+      "score": 0.29236147,
+      "page": 5,
+      "stable_id": "8934d4f16c3a3c14",
+      "chunk_id": "v1_ed9486333327745de5f89448b31ba9789140caa2",
+      "content_type": "text"
+    },
+    {
+      "rank": 16,
+      "score": 0.28657362,
+      "page": 4,
+      "stable_id": "65fc46e338b61a37",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 17,
+      "score": 0.2839384,
+      "page": 5,
+      "stable_id": "cd3ea38db950eaa6",
+      "chunk_id": "v1_3eb623c09e53a87105810e61594249df98d67b1f",
+      "content_type": "text"
+    },
+    {
+      "rank": 18,
+      "score": 0.28359765,
+      "page": 5,
+      "stable_id": "bef70edb076d5a50",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 19,
+      "score": 0.28243706,
+      "page": 4,
+      "stable_id": "7664b8bb457520de",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 20,
+      "score": 0.2660823,
+      "page": 3,
+      "stable_id": "30026ff16750f7c9",
+      "chunk_id": "v1_6043f73eb219ed261a4d1c7ff0db4ff0ba179d90",
+      "content_type": "text"
+    }
+  ],
+  "config": {
+    "top_k": 20,
+    "content_types": [
+      "text",
+      "figure_caption"
+    ],
+    "backend": "ollama",
+    "force_citations": true
+  }
+}

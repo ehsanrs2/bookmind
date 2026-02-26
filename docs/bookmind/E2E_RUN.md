@@ -2,7 +2,9 @@
 
 Use the E2E orchestrator to run extraction, ingest, optional evaluation, and reliability packaging in one command.
 
-## Example
+For product-facing single-query inference output, see `docs/bookmind/ASK.md`.
+
+## Example (`--pdf` Mode)
 
 ```bash
 ./tools/bookmind_bench/scripts/e2e_bookmind.sh \
@@ -16,6 +18,28 @@ Use the E2E orchestrator to run extraction, ingest, optional evaluation, and rel
   --ollama_api generate \
   --queries tools/bookmind_bench/samples/queries_scanned_tech_truth50.json
 ```
+
+## Example (`--from_bundle` Mode)
+
+Use this mode when a bundle already exists and you want to start directly from ingest.
+
+```bash
+./tools/bookmind_bench/scripts/e2e_bookmind.sh \
+  --from_bundle /tmp/bookmind_e2e_run/bundle \
+  --out /tmp/bookmind_e2e_rerun \
+  --qdrant_url http://127.0.0.1:6333 \
+  --collection bookmind_bench \
+  --backend ollama \
+  --ollama_url http://127.0.0.1:11434 \
+  --ollama_model qwen3-vl:latest \
+  --ollama_api generate \
+  --queries tools/bookmind_bench/samples/queries_scanned_tech_truth50.json
+```
+
+Behavior notes:
+- `--from_bundle` skips extraction, merge, and bundle creation.
+- Pipeline starts at `qdrant-ingest` using the provided bundle path.
+- In `--pdf` mode, extractor steps that are unavailable are skipped with warnings when optional.
 
 ## What It Produces
 
@@ -58,4 +82,5 @@ Behavior:
 - Citations are case-sensitive in this allowlist; models are instructed to copy IDs exactly and use only listed IDs.
 - This reduces `FAIL_UNRESOLVABLE_CITATIONS` by preventing invented/non-retrieved citation IDs.
 - If enabled, one repair retry rewrites answers with citations when initial output has too few markers.
+- In force mode repair, unsupported sentences may be removed when they cannot be cited with allowed IDs; if no supported answer remains, output is `NOT_FOUND`.
 - Default behavior remains unchanged when `--force_citations false` (default).

@@ -57,6 +57,13 @@ def test_parse_citations_supports_page_keyword_and_key_value_formats() -> None:
     assert citations[4]["chunk_id"] == "v1_deadbeef"
 
 
+def test_parse_citations_supports_sources_line_bare_id() -> None:
+    citations = parse_citations("Answer text.\nSources: [v1_chunk_abc]")
+    assert len(citations) == 1
+    assert citations[0]["kind"] == "chunk_id"
+    assert citations[0]["chunk_id"] == "v1_chunk_abc"
+
+
 def test_resolve_citations_matches_chunk_id_and_stable_id() -> None:
     retrieved = [
         {"stable_id": "s1", "chunk_id": "v1_c1", "page": 1},

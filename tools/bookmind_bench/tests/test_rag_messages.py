@@ -1,4 +1,5 @@
 from rag_preview import (
+    apply_force_citation_repair_fallback,
     build_citation_repair_messages,
     build_force_citation_allowlist,
     build_rag_messages,
@@ -80,5 +81,26 @@ def test_build_citation_repair_messages_includes_allowlist_constraint() -> None:
         allowed_citation_ids=["v1_A", "S2"],
     )
     user_content = messages[1]["content"]
+    assert "Every factual sentence ends with a citation marker." in user_content
+    assert "Citation markers must appear at the END of sentences." in user_content
+    assert "If you cannot cite a sentence, remove that sentence." in user_content
     assert "Use ONLY allowed citation IDs listed in the context. Do not invent." in user_content
     assert "Allowed citation IDs (use ONLY these): v1_A, S2" in user_content
+
+
+def test_apply_force_citation_repair_fallback_appends_sources_line() -> None:
+    repaired = apply_force_citation_repair_fallback(
+        "The valve opens during startup.",
+        citation_min_count=1,
+        allowed_citation_ids=["v1_chunk_s1"],
+    )
+    assert repaired.endswith("Sources: [v1_chunk_s1]")
+
+
+def test_apply_force_citation_repair_fallback_preserves_not_found() -> None:
+    repaired = apply_force_citation_repair_fallback(
+        "NOT_FOUND",
+        citation_min_count=1,
+        allowed_citation_ids=["v1_chunk_s1"],
+    )
+    assert repaired == "NOT_FOUND"

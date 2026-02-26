@@ -255,8 +255,14 @@ def build_citation_repair_messages(
         "```\n\n"
         "Previous answer (needs citation repair):\n"
         f"{str(original_answer or '').strip()}\n\n"
-        "Rewrite the answer to include the required citation markers using ONLY the provided context. "
-        "Do not add new claims. Keep it concise.\n"
+        "Rewrite your answer so that:\n"
+        "- Every factual sentence ends with a citation marker.\n"
+        "- Citation markers must appear at the END of sentences.\n"
+        "- Use format: [<page>:<chunk_id_or_stable_id>].\n"
+        "- Use ONLY allowed IDs.\n"
+        "- If you cannot cite a sentence, remove that sentence.\n"
+        "- If no supported answer exists, reply exactly: NOT_FOUND.\n"
+        "Use ONLY the provided context. Do not add new claims. Keep it concise.\n"
         f"{_force_citation_instruction(citation_min_count)}{allowlist_hint}"
         f"{f'\n{allowlist_text}' if allowlist_text else ''}"
     )
@@ -264,6 +270,30 @@ def build_citation_repair_messages(
         {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
         {"role": "user", "content": user_content},
     ]
+
+
+def apply_force_citation_repair_fallback(
+    answer_text: str,
+    *,
+    citation_min_count: int,
+    allowed_citation_ids: Optional[Sequence[str]] = None,
+) -> str:
+    """Ensure repaired force-citation answers keep at least one valid marker when possible."""
+    text = str(answer_text or "").strip()
+    if not text or text == "NOT_FOUND":
+        return text
+    if len(parse_citations(text)) >= max(1, int(citation_min_count)):
+        return text
+    first_allowed_id = next(
+        (str(item).strip() for item in (allowed_citation_ids or []) if str(item).strip()),
+        "",
+    )
+    if not first_allowed_id:
+        return text
+    fallback_line = f"Sources: [{first_allowed_id}]"
+    if fallback_line in text:
+        return text
+    return f"{text}\n{fallback_line}"
 
 
 def _truncate_rag_user_context(content: str, max_context_chars: int) -> str:

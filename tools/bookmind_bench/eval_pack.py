@@ -14,6 +14,7 @@ from citations import parse_citations, resolve_citations
 from engines.vlm_providers import build_vlm_provider
 from qdrant_ingest import search_query
 from rag_preview import (
+    apply_force_citation_repair_fallback,
     build_citation_repair_messages,
     build_context,
     build_force_citation_allowlist,
@@ -276,15 +277,16 @@ def run_eval(
             citations = context_payload.get("citations")
             if not isinstance(citations, list):
                 citations = []
+            allowed_citation_ids = (
+                build_force_citation_allowlist(citations) if force_citations else None
+            )
             messages = build_rag_messages(
                 query_text,
                 context_text,
                 require_json_response=False,
                 force_citations=force_citations,
                 citation_min_count=citation_min_count,
-                allowed_citation_ids=(
-                    build_force_citation_allowlist(citations) if force_citations else None
-                ),
+                allowed_citation_ids=allowed_citation_ids,
             )
 
             progress_reporter.phase(query_id, "generate")
@@ -328,9 +330,7 @@ def run_eval(
                             context_text=context_text,
                             original_answer=answer_text,
                             citation_min_count=citation_min_count,
-                            allowed_citation_ids=(
-                                build_force_citation_allowlist(citations) if force_citations else None
-                            ),
+                            allowed_citation_ids=allowed_citation_ids,
                         )
                         repaired_answer_text, usage = generate_answer(
                             provider=provider,
@@ -346,6 +346,11 @@ def run_eval(
                             ollama_debug_hook=hook,
                         )
                         repaired_text = str(repaired_answer_text or "").strip()
+                        repaired_text = apply_force_citation_repair_fallback(
+                            repaired_text,
+                            citation_min_count=citation_min_count,
+                            allowed_citation_ids=allowed_citation_ids,
+                        )
                         if repaired_text:
                             answer_text = repaired_text
                         citation_repair_success = len(parse_citations(answer_text)) >= citation_min_count

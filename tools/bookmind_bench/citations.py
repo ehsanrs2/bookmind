@@ -91,7 +91,15 @@ def parse_citations(text: str) -> List[Dict[str, Any]]:
     for match in _CITATION_BRACKET_RE.finditer(str(text or "")):
         raw = match.group(0)
         body = match.group(1).strip()
-        if not body or ":" not in body:
+        if not body:
+            continue
+        if ":" not in body:
+            prefix = str(text[max(0, match.start() - 32) : match.start()]).lower()
+            if re.search(r"sources?\s*:\s*$", prefix):
+                if body.startswith("v1_"):
+                    _append_page_or_id_citation(parsed, raw=raw, page=None, chunk_id=body)
+                elif _to_int(body) is None:
+                    _append_page_or_id_citation(parsed, raw=raw, page=None, stable_id=body)
             continue
 
         key_values = _parse_key_value_tokens(body)

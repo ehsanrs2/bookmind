@@ -69,7 +69,7 @@ def test_generate_answer_does_not_accept_empty_content_with_thinking(monkeypatch
     assert "done_reason=length" in message
     assert "eval_count=512" in message
     assert "prompt_eval_count=32" in message
-    assert len(calls) == 3
+    assert len(calls) == 2
     assert calls[0]["think"] is False
     assert calls[1]["options"]["num_predict"] >= 1024
 
@@ -95,13 +95,7 @@ def test_generate_answer_length_retry_recovers_with_ultra_short_fallback(monkeyp
             "prompt_eval_count": 21,
         },
         {
-            "message": {"content": "", "thinking": "reasoning 2"},
-            "done_reason": "length",
-            "eval_count": 1024,
-            "prompt_eval_count": 22,
-        },
-        {
-            "message": {"content": '{"answer":"fallback succeeded"}'},
+            "message": {"content": '{"answer":"retry succeeded"}'},
             "done_reason": "stop",
             "eval_count": 200,
             "prompt_eval_count": 15,
@@ -130,12 +124,12 @@ def test_generate_answer_length_retry_recovers_with_ultra_short_fallback(monkeyp
         ollama_retry_num_predict=1024,
         ollama_think=False,
     )
-    assert answer == "fallback succeeded"
+    assert answer == "retry succeeded"
     assert usage is not None
-    assert usage["attempt_name"] == "ultra_short_json"
+    assert usage["attempt_name"] == "retry_length_boost"
     assert requests_seen[0]["options"]["num_predict"] == 512
     assert requests_seen[1]["options"]["num_predict"] >= 1024
-    assert requests_seen[2]["options"]["num_predict"] >= 1024
+    assert len(requests_seen) == 2
 
 
 def test_generate_answer_ollama_generate_happy_path(monkeypatch) -> None:
@@ -262,7 +256,7 @@ def test_generate_answer_ollama_generate_empty_response_raises(monkeypatch) -> N
     assert "eval_count=512" in text
     assert "prompt_eval_count=31" in text
     assert "raw_head_500=" in text
-    assert calls["count"] == 3
+    assert calls["count"] == 2
 
 
 def test_ollama_integration_repro_modes(tmp_path: Path) -> None:

@@ -9,7 +9,7 @@ usage() {
   cat <<USAGE
 Usage:
   tools/bookmind_bench/scripts/e2e_bookmind.sh \
-    --pdf <path> \
+    --pdf <path> | --from_bundle <bundle_path> \
     --out <dir> \
     [--qdrant_url <url>] \
     [--collection <name>] \
@@ -26,6 +26,7 @@ USAGE
 }
 
 PDF=""
+FROM_BUNDLE=""
 OUT=""
 QDRANT_URL="http://127.0.0.1:6333"
 COLLECTION="bookmind_bench"
@@ -43,6 +44,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --out)
       OUT="${2:-}"
+      shift 2
+      ;;
+    --from_bundle)
+      FROM_BUNDLE="${2:-}"
       shift 2
       ;;
     --qdrant_url)
@@ -85,13 +90,25 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$PDF" || -z "$OUT" ]]; then
-  echo "--pdf and --out are required." >&2
+if [[ -z "$OUT" ]]; then
+  echo "--out is required." >&2
   usage
   exit 2
 fi
 
-if [[ ! -f "$PDF" ]]; then
+if [[ -n "$PDF" && -n "$FROM_BUNDLE" ]]; then
+  echo "Use exactly one of --pdf or --from_bundle." >&2
+  usage
+  exit 2
+fi
+
+if [[ -z "$PDF" && -z "$FROM_BUNDLE" ]]; then
+  echo "Either --pdf or --from_bundle is required." >&2
+  usage
+  exit 2
+fi
+
+if [[ -n "$PDF" && ! -f "$PDF" ]]; then
   echo "PDF not found: $PDF" >&2
   exit 2
 fi
@@ -118,13 +135,41 @@ IMAGE_DIR="$OUT/images"
 RETR_OUT="$OUT/retrieval_eval"
 EVAL_OUT="$OUT/eval"
 RELIABILITY_OUT="$OUT/reliability"
+BUNDLE_DIR="$OUT/bundle"
 
-MARKER_RAN=0
-LAYOUT_RAN=0
-VLM_LAYOUT_RAN=0
-RETRIEVAL_RAN=0
-EVAL_RAN=0
-RELIABILITY_RAN=0
+MODE="pdf"
+if [[ -n "$FROM_BUNDLE" ]]; then
+  MODE="from_bundle"
+fi
+
+if [[ "$MODE" == "from_bundle" ]]; then
+  if [[ -f "$FROM_BUNDLE" ]]; then
+    BUNDLE_DIR="$(cd "$(dirname "$FROM_BUNDLE")" && pwd)"
+  elif [[ -d "$FROM_BUNDLE" ]]; then
+    BUNDLE_DIR="$(cd "$FROM_BUNDLE" && pwd)"
+  else
+    echo "--from_bundle path not found: $FROM_BUNDLE" >&2
+    exit 2
+  fi
+  if [[ ! -f "$BUNDLE_DIR/records.jsonl" ]]; then
+    echo "Bundle records.jsonl not found in: $BUNDLE_DIR" >&2
+    exit 2
+  fi
+fi
+
+PAGE_COUNT="0"
+PAGES="(none)"
+MARKER_STATUS="SKIP"
+RENDER_STATUS="SKIP"
+PADDLEOCR_STATUS="SKIP"
+LAYOUT_STATUS="SKIP"
+VLM_LAYOUT_STATUS="SKIP"
+MERGE_STATUS="SKIP"
+BUNDLE_STATUS="SKIP"
+QDRANT_INGEST_STATUS="SKIP"
+RETRIEVAL_STATUS="SKIP"
+EVAL_STATUS="SKIP"
+RELIABILITY_STATUS="SKIP"
 
 run_step() {
   local step="$1"
@@ -146,7 +191,8 @@ run_optional_step() {
   return 1
 }
 
-PAGE_COUNT="$(BOOKMIND_E2E_PDF="$PDF" "$BENCH_PY" - <<'PY'
+if [[ "$MODE" == "pdf" ]]; then
+  PAGE_COUNT="$(BOOKMIND_E2E_PDF="$PDF" "$BENCH_PY" - <<'PY'
 import fitz
 import os
 pdf_path = os.environ['BOOKMIND_E2E_PDF']
@@ -155,59 +201,85 @@ with fitz.open(pdf_path) as doc:
 PY
 )"
 
-if [[ -z "$PAGE_COUNT" || "$PAGE_COUNT" -lt 1 ]]; then
-  echo "Failed to determine page count for: $PDF" >&2
-  exit 1
-fi
-
-PAGES="1-${PAGE_COUNT}"
-
-# (a) Extraction: marker + render/paddleocr; optionally layout + vlm-layout.
-run_step marker \
-  "$BENCH_PY" "$RUN_PY" marker --pdf "$PDF" --out "$OUT"
-MARKER_RAN=1
-
-run_step render \
-  "$BENCH_PY" "$RUN_PY" render --pdf "$PDF" --out "$IMAGE_DIR" --pages "$PAGES"
-
-run_step paddleocr \
-  "$BENCH_PY" "$RUN_PY" paddleocr --imgdir "$IMAGE_DIR" --out "$OUT"
-
-LAYOUT_MODEL_DIR="${BOOKMIND_LAYOUT_MODEL_DIR:-$ROOT_DIR/tools/bookmind_bench/offline_bundle/models/layoutparser_publaynet}"
-if [[ -d "$LAYOUT_MODEL_DIR" ]] && find "$LAYOUT_MODEL_DIR" -type f | grep -q .; then
-  run_step layout \
-    "$BENCH_PY" "$RUN_PY" layout --imgdir "$IMAGE_DIR" --out "$OUT" --model_dir "$LAYOUT_MODEL_DIR"
-  LAYOUT_RAN=1
-
-  if [[ "$BACKEND" == "ollama" ]]; then
-    if run_optional_step vlm_layout \
-      "$BENCH_PY" "$RUN_PY" vlm-layout \
-      --imgdir "$IMAGE_DIR" \
-      --out "$OUT" \
-      --backend ollama \
-      --ollama_url "$OLLAMA_URL" \
-      --ollama_model "$OLLAMA_MODEL" \
-      --ollama_api "$OLLAMA_API"; then
-      VLM_LAYOUT_RAN=1
-    fi
+  if [[ -z "$PAGE_COUNT" || "$PAGE_COUNT" -lt 1 ]]; then
+    echo "Failed to determine page count for: $PDF" >&2
+    exit 1
   fi
-else
-  echo "[E2E] layout model dir not available, skipping layout/vlm-layout: $LAYOUT_MODEL_DIR"
+
+  PAGES="1-${PAGE_COUNT}"
 fi
 
-# (b) Merge + bundle.
-run_step merge \
-  "$BENCH_PY" "$RUN_PY" merge --out "$OUT"
+if [[ "$MODE" == "pdf" ]]; then
+  # (a) Extraction: marker + render/paddleocr; optionally layout + vlm-layout.
+  if run_optional_step marker_single \
+    "$BENCH_PY" "$RUN_PY" marker --pdf "$PDF" --out "$OUT"; then
+    MARKER_STATUS="RUN"
+  else
+    MARKER_STATUS="SKIP_MISSING"
+    echo "[E2E] WARN: marker_single unavailable, skipping marker extraction."
+  fi
 
-run_step bundle \
-  "$BENCH_PY" "$RUN_PY" bundle --out "$OUT" --imgdir "$IMAGE_DIR"
+  run_step render \
+    "$BENCH_PY" "$RUN_PY" render --pdf "$PDF" --out "$IMAGE_DIR" --pages "$PAGES"
+  RENDER_STATUS="RUN"
+
+  if run_optional_step paddleocr \
+    "$BENCH_PY" "$RUN_PY" paddleocr --imgdir "$IMAGE_DIR" --out "$OUT"; then
+    PADDLEOCR_STATUS="RUN"
+  else
+    PADDLEOCR_STATUS="SKIP_MISSING"
+    echo "[E2E] ERROR: paddleocr unavailable and --pdf mode requires it." >&2
+    exit 1
+  fi
+
+  LAYOUT_MODEL_DIR="${BOOKMIND_LAYOUT_MODEL_DIR:-$ROOT_DIR/tools/bookmind_bench/offline_bundle/models/layoutparser_publaynet}"
+  if [[ -d "$LAYOUT_MODEL_DIR" ]] && find "$LAYOUT_MODEL_DIR" -type f | grep -q .; then
+    if run_optional_step layout \
+      "$BENCH_PY" "$RUN_PY" layout --imgdir "$IMAGE_DIR" --out "$OUT" --model_dir "$LAYOUT_MODEL_DIR"; then
+      LAYOUT_STATUS="RUN"
+    else
+      LAYOUT_STATUS="SKIP_MISSING"
+      echo "[E2E] WARN: layout extractor unavailable, skipping layout."
+    fi
+
+    if [[ "$BACKEND" == "ollama" ]]; then
+      if run_optional_step vlm_layout \
+        "$BENCH_PY" "$RUN_PY" vlm-layout \
+        --imgdir "$IMAGE_DIR" \
+        --out "$OUT" \
+        --backend ollama \
+        --ollama_url "$OLLAMA_URL" \
+        --ollama_model "$OLLAMA_MODEL" \
+        --ollama_api "$OLLAMA_API"; then
+        VLM_LAYOUT_STATUS="RUN"
+      else
+        VLM_LAYOUT_STATUS="SKIP_MISSING"
+        echo "[E2E] WARN: vlm-layout unavailable, skipping."
+      fi
+    fi
+  else
+    LAYOUT_STATUS="SKIP_MISSING"
+    echo "[E2E] WARN: layout model dir not available, skipping layout/vlm-layout: $LAYOUT_MODEL_DIR"
+  fi
+
+  # (b) Merge + bundle.
+  run_step merge \
+    "$BENCH_PY" "$RUN_PY" merge --out "$OUT"
+  MERGE_STATUS="RUN"
+
+  run_step bundle \
+    "$BENCH_PY" "$RUN_PY" bundle --out "$OUT" --imgdir "$IMAGE_DIR"
+  BUNDLE_STATUS="RUN"
+fi
 
 # (c) Qdrant ingest.
 run_step qdrant_ingest \
   "$BENCH_PY" "$RUN_PY" qdrant-ingest \
   --run "$OUT" \
+  --bundle_dir "$BUNDLE_DIR" \
   --qdrant_url "$QDRANT_URL" \
   --collection "$COLLECTION"
+QDRANT_INGEST_STATUS="RUN"
 
 # (d) Optional evaluation suite.
 if [[ -n "$QUERIES" ]]; then
@@ -217,7 +289,7 @@ if [[ -n "$QUERIES" ]]; then
     --out "$RETR_OUT" \
     --qdrant_url "$QDRANT_URL" \
     --collection "$COLLECTION"
-  RETRIEVAL_RAN=1
+  RETRIEVAL_STATUS="RUN"
 
   if [[ "$BACKEND" == "ollama" ]]; then
     run_step eval \
@@ -238,14 +310,14 @@ if [[ -n "$QUERIES" ]]; then
       --qdrant_url "$QDRANT_URL" \
       --collection "$COLLECTION"
   fi
-  EVAL_RAN=1
+  EVAL_STATUS="RUN"
 
   run_step reliability_pack \
     "$BENCH_PY" "$RUN_PY" reliability-pack \
     --retrieval_report "$RETR_OUT/retrieval_report.json" \
     --eval_report "$EVAL_OUT/report.json" \
     --out "$RELIABILITY_OUT"
-  RELIABILITY_RAN=1
+  RELIABILITY_STATUS="RUN"
 else
   echo "[E2E] --queries not provided; skipping retrieval-eval/eval/reliability-pack"
 fi
@@ -254,26 +326,38 @@ fi
 {
   echo "# BookMind E2E Summary"
   echo
-  echo "- pdf: \\`$PDF\\`"
+  echo "- mode: \\`$MODE\\`"
+  echo "- pdf: \\`${PDF:-"(none)"}\\`"
+  echo "- from_bundle: \\`${FROM_BUNDLE:-"(none)"}\\`"
   echo "- out: \\`$OUT\\`"
-  echo "- pages_processed: $PAGE_COUNT"
+  echo "- bundle_dir_used: \\`$BUNDLE_DIR\\`"
+  echo "- pages_processed: ${PAGE_COUNT:-0}"
+  echo "- pages_range: \\`${PAGES:-"(none)"}\\`"
   echo "- qdrant_url: \\`$QDRANT_URL\\`"
   echo "- collection: \\`$COLLECTION\\`"
   echo "- backend: \\`${BACKEND:-default(eval)}\\`"
+  echo "- ollama_url: \\`$OLLAMA_URL\\`"
+  echo "- ollama_model: \\`$OLLAMA_MODEL\\`"
+  echo "- ollama_api: \\`$OLLAMA_API\\`"
   if [[ -n "$QUERIES" ]]; then
     echo "- queries: \\`$QUERIES\\`"
   else
-    echo "- queries: (not provided)"
+    echo "- queries: \\`(none)\\`"
   fi
   echo
   echo "## Step Status"
   echo
-  echo "- marker: $MARKER_RAN"
-  echo "- layout: $LAYOUT_RAN"
-  echo "- vlm-layout: $VLM_LAYOUT_RAN"
-  echo "- retrieval-eval: $RETRIEVAL_RAN"
-  echo "- eval: $EVAL_RAN"
-  echo "- reliability-pack: $RELIABILITY_RAN"
+  echo "- marker_single: $MARKER_STATUS"
+  echo "- render: $RENDER_STATUS"
+  echo "- paddleocr: $PADDLEOCR_STATUS"
+  echo "- layout: $LAYOUT_STATUS"
+  echo "- vlm-layout: $VLM_LAYOUT_STATUS"
+  echo "- merge: $MERGE_STATUS"
+  echo "- bundle: $BUNDLE_STATUS"
+  echo "- qdrant-ingest: $QDRANT_INGEST_STATUS"
+  echo "- retrieval-eval: $RETRIEVAL_STATUS"
+  echo "- eval: $EVAL_STATUS"
+  echo "- reliability-pack: $RELIABILITY_STATUS"
   echo
   echo "## Key Outputs"
   echo
@@ -283,7 +367,7 @@ fi
   echo "- layout_output: \\`$OUT/layout/output.jsonl\\`"
   echo "- vlm_output: \\`$OUT/vlm/output.jsonl\\`"
   echo "- ingest_records: \\`$OUT/ingest/records.jsonl\\`"
-  echo "- bundle_records: \\`$OUT/bundle/records.jsonl\\`"
+  echo "- bundle_records: \\`$BUNDLE_DIR/records.jsonl\\`"
   echo "- retrieval_report: \\`$RETR_OUT/retrieval_report.json\\`"
   echo "- eval_report: \\`$EVAL_OUT/report.json\\`"
   echo "- reliability_report: \\`$RELIABILITY_OUT/reliability_report.json\\`"

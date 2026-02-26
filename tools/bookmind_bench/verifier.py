@@ -126,6 +126,13 @@ def verify_answer(
     citation_report: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Return additive verification result for one generated answer."""
+    if str(answer_text or "").strip() == "NOT_FOUND":
+        return {
+            "verification_status": PASS,
+            "short_reason": "NOT_FOUND",
+            "suggested_safe_answer": None,
+        }
+
     citations_total = int(citation_report.get("citations_total") or 0)
     if citations_total == 0:
         return {

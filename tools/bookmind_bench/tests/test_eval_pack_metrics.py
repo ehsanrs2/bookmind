@@ -325,7 +325,7 @@ def test_run_eval_force_citations_repairs_missing_citations(tmp_path: Path, monk
         messages = kwargs.get("messages") or []
         if isinstance(messages, list) and len(messages) > 1 and isinstance(messages[1], dict):
             repair_prompt["user_content"] = str(messages[1].get("content") or "")
-        return "The valve opens during startup [1:v1_chunk_s1].", {"total_tokens": 4}
+        return "The valve opens during startup.", {"total_tokens": 4}
 
     monkeypatch.setattr(eval_pack, "search_query", _fake_search_query)
     monkeypatch.setattr(eval_pack, "build_vlm_provider", lambda **kwargs: _FakeProvider())
@@ -349,10 +349,67 @@ def test_run_eval_force_citations_repairs_missing_citations(tmp_path: Path, monk
     assert calls["count"] == 2
     assert row["citation_repair_applied"] is True
     assert row["citation_repair_success"] is True
+    assert row["answer_text"].endswith("Sources: [v1_chunk_s1]")
     assert row["citations_total"] >= 1
     assert row["citations_resolvable"] is True
     assert row["verification_status"] == "PASS"
+    assert "Every factual sentence ends with a citation marker." in repair_prompt["user_content"]
+    assert "If you cannot cite a sentence, remove that sentence." in repair_prompt["user_content"]
     assert "Allowed citation IDs (use ONLY these): v1_chunk_s1" in repair_prompt["user_content"]
+
+
+def test_run_eval_force_citations_repair_drops_unsupported_sentence(tmp_path: Path, monkeypatch) -> None:
+    queries = [{"id": "q1", "query": "What opens?", "expected_pages": [1]}]
+
+    def _fake_search_query(**kwargs):
+        return [
+            {
+                "stable_id": "s1",
+                "chunk_id": "v1_chunk_s1",
+                "page": 1,
+                "content_type": "text",
+                "text": "The valve opens during startup.",
+                "meta": {},
+            }
+        ]
+
+    class _FakeProvider:
+        pass
+
+    calls = {"count": 0}
+
+    def _fake_generate_answer(**kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return (
+                "The valve opens during startup. "
+                "Hydraulic pressure is 3000 psi in landing gear.",
+                {"total_tokens": 7},
+            )
+        return "The valve opens during startup [1:v1_chunk_s1].", {"total_tokens": 4}
+
+    monkeypatch.setattr(eval_pack, "search_query", _fake_search_query)
+    monkeypatch.setattr(eval_pack, "build_vlm_provider", lambda **kwargs: _FakeProvider())
+    monkeypatch.setattr(eval_pack, "generate_answer", _fake_generate_answer)
+
+    results = eval_pack.run_eval(
+        queries=queries,
+        qdrant_url="http://127.0.0.1:6333",
+        collection="bookmind_bench",
+        backend_cfg={"backend": "vllm"},
+        retrieval_cfg={},
+        gen_cfg={
+            "force_citations": True,
+            "citation_repair_retry": True,
+            "citation_min_count": 1,
+        },
+        output_dir=tmp_path,
+    )
+
+    row = results["queries"][0]
+    assert calls["count"] == 2
+    assert "Hydraulic pressure is 3000 psi in landing gear." not in row["answer_text"]
+    assert row["verification_status"] == "PASS"
 
 
 def test_run_eval_force_citations_unresolved_id_fails_resolvable(tmp_path: Path, monkeypatch) -> None:
@@ -437,5 +494,7 @@ def test_run_eval_force_citations_skips_repair_for_not_found(tmp_path: Path, mon
     row = results["queries"][0]
     assert calls["count"] == 1
     assert row["answer_text"] == "NOT_FOUND"
+    assert row["verification_status"] == "PASS"
+    assert row["verification_reason"] == "NOT_FOUND"
     assert row["citation_repair_applied"] is False
     assert row["citation_repair_success"] is False

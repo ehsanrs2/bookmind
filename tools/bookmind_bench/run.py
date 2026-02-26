@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 from engines.marker_engine import run_marker_pdf
@@ -25,7 +27,13 @@ from qdrant_ingest import (
     ingest_bundle,
     search_query,
 )
+from product_regression import (
+    evaluate_check,
+    load_product_checks,
+    write_product_compare_report,
+)
 from rag_preview import (
+    apply_force_citation_repair_fallback,
     build_citation_repair_messages,
     build_context,
     build_force_citation_allowlist,
@@ -84,7 +92,11 @@ def _parse_ollama_think_arg(value: object) -> bool | str:
 def _resolve_citation_repair_retry(value: object, *, force_citations: bool) -> bool:
     if value is None:
         return bool(force_citations)
-    return bool(value)
+    if isinstance(value, str) and str(value).strip().lower() == "auto":
+        return bool(force_citations)
+    if isinstance(value, bool):
+        return value
+    return _parse_bool(value)
 
 
 def _is_not_found_answer(answer_text: str) -> bool:
@@ -675,6 +687,11 @@ def _cmd_rag_preview(args: argparse.Namespace) -> int:
                 ollama_debug_hook=debug_hook,
             )
             repaired_text = str(repaired_answer_text or "").strip()
+            repaired_text = apply_force_citation_repair_fallback(
+                repaired_text,
+                citation_min_count=citation_min_count,
+                allowed_citation_ids=allowed_citation_ids,
+            )
             if repaired_text:
                 answer_text = repaired_text
             parsed_model_citations = parse_citations(answer_text)
@@ -730,6 +747,217 @@ def _cmd_rag_preview(args: argparse.Namespace) -> int:
         ),
         end="",
     )
+    return 0
+
+
+def _summarize_retrieved_rows(rows: list[dict]) -> list[dict]:
+    summarized: list[dict] = []
+    for rank, row in enumerate(rows, start=1):
+        if not isinstance(row, dict):
+            continue
+        score = row.get("score")
+        score_value = None
+        if isinstance(score, (int, float)):
+            score_value = float(score)
+        page = row.get("page")
+        page_value = page if isinstance(page, int) else None
+        summarized.append(
+            {
+                "rank": rank,
+                "score": score_value,
+                "page": page_value,
+                "stable_id": str(row.get("stable_id") or row.get("id") or ""),
+                "chunk_id": str(row.get("chunk_id") or ""),
+                "content_type": str(row.get("content_type") or ""),
+            }
+        )
+    return summarized
+
+
+def _run_ask_query(args: argparse.Namespace, *, query: str) -> dict:
+    content_types = _parse_content_types(args.content_types)
+    results = search_query(
+        query=query,
+        qdrant_url=args.qdrant_url,
+        collection=args.collection,
+        embed_model=args.embed_model,
+        top_k=args.top_k,
+        timeout_s=args.timeout_s,
+        content_types=content_types if content_types else None,
+        embed_cache_dir=args.embed_cache_dir,
+        embed_local_only=args.embed_local_only,
+        hf_timeout_s=args.hf_timeout_s,
+        hf_retries=args.hf_retries,
+    )
+
+    context_payload = build_context(results, max_chars=args.max_context_chars)
+    context_text = str(context_payload.get("context_text") or "")
+    citations = (
+        context_payload.get("citations")
+        if isinstance(context_payload.get("citations"), list)
+        else []
+    )
+    force_citations = bool(args.force_citations)
+    citation_min_count = max(1, int(args.citation_min_count))
+    citation_repair_retry = _resolve_citation_repair_retry(
+        args.citation_repair_retry,
+        force_citations=force_citations,
+    )
+    allowed_citation_ids = (
+        build_force_citation_allowlist(citations) if force_citations else None
+    )
+    messages = build_rag_messages(
+        query,
+        context_text,
+        require_json_response=False,
+        force_citations=force_citations,
+        citation_min_count=citation_min_count,
+        allowed_citation_ids=allowed_citation_ids,
+    )
+    provider = build_vlm_provider(
+        backend=args.backend,
+        endpoint=args.endpoint,
+        model=args.model,
+        ollama_url=args.ollama_url,
+        ollama_model=args.ollama_model,
+        ollama_format=args.ollama_format,
+        ollama_num_ctx=args.ollama_num_ctx,
+        ollama_api=args.ollama_api,
+    )
+    tuned_num_predict, tuned_retry_num_predict = _resolve_ollama_num_predict_cfg(
+        backend=args.backend,
+        max_context_chars=args.max_context_chars,
+        ollama_num_predict=args.ollama_num_predict,
+        ollama_retry_num_predict=args.ollama_retry_num_predict,
+        ollama_num_predict_auto=args.ollama_num_predict_auto,
+    )
+    ollama_attempts = []
+    debug_hook = ollama_attempts.append if args.backend == "ollama" else None
+
+    generation_error = None
+    answer_text = ""
+    try:
+        raw_answer_text, _usage = generate_answer(
+            provider=provider,
+            messages=messages,
+            max_tokens=args.max_tokens,
+            temperature=args.temperature,
+            ollama_num_predict=tuned_num_predict,
+            ollama_retry_num_predict=tuned_retry_num_predict,
+            max_context_chars=args.max_context_chars,
+            ollama_num_predict_auto=args.ollama_num_predict_auto,
+            ollama_think=args.ollama_think,
+            fallback_citations=citations,
+            ollama_debug_hook=debug_hook,
+        )
+        answer_text = str(raw_answer_text or "").strip()
+    except Exception as exc:
+        generation_error = str(exc)
+
+    if (
+        generation_error is None
+        and force_citations
+        and citation_repair_retry
+        and not _is_not_found_answer(answer_text)
+        and len(parse_citations(answer_text)) < citation_min_count
+    ):
+        repair_messages = build_citation_repair_messages(
+            query=query,
+            context_text=context_text,
+            original_answer=answer_text,
+            citation_min_count=citation_min_count,
+            allowed_citation_ids=allowed_citation_ids,
+        )
+        try:
+            repaired_answer_text, _repair_usage = generate_answer(
+                provider=provider,
+                messages=repair_messages,
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+                ollama_num_predict=tuned_num_predict,
+                ollama_retry_num_predict=tuned_retry_num_predict,
+                max_context_chars=args.max_context_chars,
+                ollama_num_predict_auto=args.ollama_num_predict_auto,
+                ollama_think=args.ollama_think,
+                fallback_citations=citations,
+                ollama_debug_hook=debug_hook,
+            )
+            repaired_text = str(repaired_answer_text or "").strip()
+            repaired_text = apply_force_citation_repair_fallback(
+                repaired_text,
+                citation_min_count=citation_min_count,
+                allowed_citation_ids=allowed_citation_ids,
+            )
+            if repaired_text:
+                answer_text = repaired_text
+        except Exception:
+            pass
+
+    parsed_model_citations = parse_citations(answer_text)
+    model_citation_report = resolve_citations(parsed_model_citations, citations)
+    verification = verify_answer(
+        answer_text=answer_text,
+        retrieved_rows=results,
+        citation_report=model_citation_report,
+    )
+    verification_status = str(verification.get("verification_status") or "")
+    verification_reason = str(verification.get("short_reason") or "")
+    if generation_error:
+        verification_reason = generation_error
+
+    status = "FAIL"
+    final_answer = str(answer_text or "")
+    if _is_not_found_answer(answer_text):
+        status = "NOT_FOUND"
+        final_answer = "NOT_FOUND"
+        verification_status = PASS
+        verification_reason = "NOT_FOUND"
+    elif verification_status == PASS:
+        status = "PASS"
+
+    return {
+        "query": query,
+        "final_answer": final_answer,
+        "status": status,
+        "verification_status": verification_status,
+        "verification_reason": verification_reason,
+        "citations_total": int(model_citation_report.get("citations_total") or 0),
+        "citations_resolved": int(model_citation_report.get("citations_resolved") or 0),
+        "citations_resolvable": bool(model_citation_report.get("citations_resolvable")),
+        "cited_pages": sorted(
+            int(page)
+            for page in (model_citation_report.get("resolved_pages") or set())
+            if isinstance(page, int)
+        ),
+        "cited_ids": [
+            str(value)
+            for value in (model_citation_report.get("resolved_ids") or [])
+            if str(value).strip()
+        ],
+        "first_cited_rank": model_citation_report.get("first_cited_rank"),
+        "retrieved_rows": _summarize_retrieved_rows(results),
+        "config": {
+            "top_k": int(args.top_k),
+            "content_types": content_types,
+            "backend": str(args.backend),
+            "force_citations": force_citations,
+        },
+    }
+
+
+def _cmd_ask(args: argparse.Namespace) -> int:
+    ask_result = _run_ask_query(args, query=args.query)
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(ask_result, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+
+    print(json.dumps(ask_result, ensure_ascii=True, indent=2))
+
+    verification_status = str(ask_result.get("verification_status") or "")
+    if bool(args.enforce_verified) and verification_status != PASS:
+        return 2
     return 0
 
 
@@ -884,6 +1112,110 @@ def _cmd_compare_baseline(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_product_check(args: argparse.Namespace) -> int:
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    checks = load_product_checks(args.checks)
+
+    per_check_results: list[dict] = []
+    blocking_failures = 0
+    for check in checks:
+        ask_result = _run_ask_query(args, query=str(check.get("query") or ""))
+        evaluation = evaluate_check(check=check, ask_result=ask_result)
+        row = {
+            "id": check.get("id"),
+            "query": check.get("query"),
+            "expected_status": check.get("expected_status"),
+            "require_resolvable_citations": bool(
+                check.get("require_resolvable_citations")
+            ),
+            "require_verification_pass": bool(check.get("require_verification_pass")),
+            "actual_status": ask_result.get("status"),
+            "verification_status": ask_result.get("verification_status"),
+            "citations_resolvable": bool(ask_result.get("citations_resolvable")),
+            "ok": bool(evaluation.get("ok")),
+            "reasons": list(evaluation.get("reasons") or []),
+            "blocking_failures": list(evaluation.get("blocking_failures") or []),
+            "ask_result_path": f"{check.get('id')}.json",
+        }
+        per_check_results.append(row)
+
+        check_output = {
+            "check": check,
+            "evaluation": evaluation,
+            "ask_result": ask_result,
+        }
+        check_path = out_dir / f"{check.get('id')}.json"
+        check_path.write_text(
+            json.dumps(check_output, ensure_ascii=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        blocking_failures += len(row["blocking_failures"])
+
+    passed = sum(1 for row in per_check_results if bool(row.get("ok")))
+    failed = len(per_check_results) - passed
+    summary = {
+        "total": len(per_check_results),
+        "passed": passed,
+        "failed": failed,
+        "blocking_failures": blocking_failures,
+        "count_expected_pass": sum(
+            1 for row in per_check_results if row.get("expected_status") == "PASS"
+        ),
+        "count_expected_not_found": sum(
+            1 for row in per_check_results if row.get("expected_status") == "NOT_FOUND"
+        ),
+        "count_expected_fail_ok": sum(
+            1 for row in per_check_results if row.get("expected_status") == "FAIL_OK"
+        ),
+    }
+    report = {
+        "metadata": {
+            "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+            "checks_path": str(args.checks),
+            "qdrant_url": str(args.qdrant_url),
+            "collection": str(args.collection),
+            "backend": str(args.backend),
+        },
+        "summary": summary,
+        "checks": per_check_results,
+    }
+    report_path = out_dir / "report.json"
+    report_path.write_text(
+        json.dumps(report, ensure_ascii=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    print(f"Product check report: {report_path}")
+    print(
+        "summary "
+        f"total={summary['total']} "
+        f"passed={summary['passed']} "
+        f"failed={summary['failed']} "
+        f"blocking_failures={summary['blocking_failures']}"
+    )
+    return 2 if blocking_failures > 0 else 0
+
+
+def _cmd_compare_product_baseline(args: argparse.Namespace) -> int:
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    max_fail_increase = args.max_fail_increase
+    report = write_product_compare_report(
+        baseline_report_path=args.baseline_report,
+        current_report_path=args.current_report,
+        output_dir=out_dir,
+        max_fail_increase=max_fail_increase,
+    )
+    print(f"Product baseline comparison report: {out_dir / 'compare_report.json'}")
+    print(
+        "summary "
+        f"verdict={report.get('verdict', '')} "
+        f"regressions={len(report.get('regressions', []))} "
+        f"threshold_failure={bool(report.get('threshold_failure'))}"
+    )
+    return 2 if str(report.get("verdict")) != "PASS" else 0
+
+
 def _cmd_ollama_debug(args: argparse.Namespace) -> int:
     if args.image and not Path(args.image).exists():
         raise SystemExit(f"Image not found: {args.image}")
@@ -913,6 +1245,22 @@ def _cmd_ollama_debug(args: argparse.Namespace) -> int:
         f"eval_count_eq_num_predict={counts.get('eval_count_eq_num_predict')} "
         f"http_error={counts.get('http_error')}"
     )
+    return 0
+
+
+def _cmd_serve(args: argparse.Namespace) -> int:
+    from api_server import create_app
+    import uvicorn
+
+    app = create_app(
+        qdrant_url=args.qdrant_url,
+        collection=args.collection,
+        backend=args.backend,
+        ollama_url=args.ollama_url,
+        ollama_model=args.ollama_model,
+        ollama_api=args.ollama_api,
+    )
+    uvicorn.run(app, host=args.host, port=int(args.port))
     return 0
 
 
@@ -1421,6 +1769,396 @@ def build_parser() -> argparse.ArgumentParser:
         help="Qdrant HTTP timeout in seconds (default 30)",
     )
     qdrant_search.set_defaults(func=_cmd_qdrant_search)
+
+    ask = subparsers.add_parser(
+        "ask",
+        help="Run single-query retrieval + answer + citations + verifier and emit stable JSON",
+    )
+    ask.add_argument("--query", required=True, help="Question text")
+    ask.add_argument(
+        "--qdrant_url",
+        default="http://127.0.0.1:6333",
+        help="Qdrant HTTP URL (default http://127.0.0.1:6333)",
+    )
+    ask.add_argument(
+        "--collection",
+        default="bookmind_bench",
+        help="Qdrant collection name (default bookmind_bench)",
+    )
+    ask.add_argument(
+        "--embed_model",
+        default=DEFAULT_EMBED_ALIAS,
+        help=(
+            "Embedding model id or local path (default all-MiniLM-L6-v2 alias for "
+            "sentence-transformers/all-MiniLM-L6-v2)"
+        ),
+    )
+    ask.add_argument(
+        "--embed_cache_dir",
+        required=False,
+        help="Optional embedding cache directory for sentence-transformers",
+    )
+    ask.add_argument(
+        "--embed_local_only",
+        default=False,
+        type=_parse_bool,
+        help="Load embedding model from local cache/files only (default false)",
+    )
+    ask.add_argument(
+        "--hf_timeout_s",
+        type=int,
+        default=30,
+        help="HuggingFace hub timeout seconds for embedding model load (default 30)",
+    )
+    ask.add_argument(
+        "--hf_retries",
+        type=int,
+        default=3,
+        help="HuggingFace retries for embedding model load (default 3)",
+    )
+    ask.add_argument(
+        "--top_k",
+        type=int,
+        default=20,
+        help="Number of retrieved chunks (default 20)",
+    )
+    ask.add_argument(
+        "--content_types",
+        default="text,figure_caption",
+        help="Optional comma-separated filter: text,table,figure_caption",
+    )
+    ask.add_argument(
+        "--max_context_chars",
+        type=int,
+        default=6000,
+        help="Maximum total context characters (default 6000)",
+    )
+    ask.add_argument(
+        "--backend",
+        choices=["vllm", "ollama"],
+        default="ollama",
+        help="Generation backend (default ollama)",
+    )
+    ask.add_argument(
+        "--endpoint",
+        default="http://127.0.0.1:8000/v1",
+        help="OpenAI-compatible endpoint for --backend vllm (default http://127.0.0.1:8000/v1)",
+    )
+    ask.add_argument(
+        "--model",
+        default="qwen3-vl",
+        help="Model name for --backend vllm (default qwen3-vl)",
+    )
+    ask.add_argument(
+        "--ollama_url",
+        default=DEFAULT_OLLAMA_URL,
+        help=f"Ollama URL for --backend ollama (default {DEFAULT_OLLAMA_URL})",
+    )
+    ask.add_argument(
+        "--ollama_model",
+        default=DEFAULT_OLLAMA_MODEL,
+        help=f"Ollama model for --backend ollama (default {DEFAULT_OLLAMA_MODEL})",
+    )
+    ask.add_argument(
+        "--ollama_format",
+        choices=["text", "json"],
+        default="text",
+        help=(
+            "Ollama answer mode for --backend ollama (default text). "
+            "'json' still uses JSON-in-text parsing and does not force wire format=json."
+        ),
+    )
+    ask.add_argument(
+        "--ollama_num_ctx",
+        type=int,
+        required=False,
+        help="Optional Ollama options.num_ctx override",
+    )
+    ask.add_argument(
+        "--ollama_api",
+        choices=["chat", "generate"],
+        default="generate",
+        help="Ollama endpoint mode for ask (default generate)",
+    )
+    ask.add_argument(
+        "--max_tokens",
+        type=int,
+        default=512,
+        help="Max generation tokens (default 512)",
+    )
+    ask.add_argument(
+        "--temperature",
+        type=float,
+        default=0.2,
+        help="Sampling temperature (default 0.2)",
+    )
+    ask.add_argument(
+        "--ollama_num_predict",
+        type=int,
+        default=1536,
+        help="Ollama options.num_predict for first attempt (default 1536)",
+    )
+    ask.add_argument(
+        "--ollama_retry_num_predict",
+        type=int,
+        default=2048,
+        help="Ollama options.num_predict for retry attempt (default 2048)",
+    )
+    ask.add_argument(
+        "--ollama_num_predict_auto",
+        default=True,
+        type=_parse_bool,
+        help=(
+            "Auto-tune Ollama num_predict for large contexts (>=7000 chars): "
+            "first>=2048, retry>=3072, cap 4096 (default true)"
+        ),
+    )
+    ask.add_argument(
+        "--ollama_think",
+        type=_parse_ollama_think_arg,
+        choices=[False, True, "high", "medium", "low"],
+        default=False,
+        help=(
+            "Ollama top-level think mode for --backend ollama "
+            "(default false; allowed: false,true,high,medium,low)"
+        ),
+    )
+    ask.add_argument(
+        "--force_citations",
+        default=False,
+        type=_parse_bool,
+        help=(
+            "Force citation markers in generated answers via strict prompt policy "
+            "(default false)"
+        ),
+    )
+    ask.add_argument(
+        "--citation_min_count",
+        type=int,
+        default=1,
+        help="Minimum citation markers required when --force_citations=true (default 1)",
+    )
+    ask.add_argument(
+        "--citation_repair_retry",
+        default="auto",
+        choices=["auto", "true", "false"],
+        help=(
+            "Run one citation-repair retry when citations are below minimum. "
+            "auto: true when --force_citations=true, else false (default auto)."
+        ),
+    )
+    ask.add_argument(
+        "--enforce_verified",
+        default=False,
+        type=_parse_bool,
+        help="Exit non-zero when verifier status is not PASS (default false)",
+    )
+    ask.add_argument(
+        "--timeout_s",
+        type=int,
+        default=30,
+        help="Qdrant HTTP timeout in seconds (default 30)",
+    )
+    ask.add_argument(
+        "--out",
+        required=False,
+        help="Optional output path for ask_result.json",
+    )
+    ask.set_defaults(func=_cmd_ask)
+
+    product_check = subparsers.add_parser(
+        "product-check",
+        help="Run product regression checks using the ask retrieval/generation/verifier path",
+    )
+    product_check.add_argument(
+        "--checks",
+        required=True,
+        help="Path to product checks JSON file",
+    )
+    product_check.add_argument(
+        "--out",
+        required=True,
+        help="Output directory for per-check JSON and report.json",
+    )
+    product_check.add_argument(
+        "--qdrant_url",
+        default="http://127.0.0.1:6333",
+        help="Qdrant HTTP URL (default http://127.0.0.1:6333)",
+    )
+    product_check.add_argument(
+        "--collection",
+        default="bookmind_bench",
+        help="Qdrant collection name (default bookmind_bench)",
+    )
+    product_check.add_argument(
+        "--embed_model",
+        default=DEFAULT_EMBED_ALIAS,
+        help=(
+            "Embedding model id or local path (default all-MiniLM-L6-v2 alias for "
+            "sentence-transformers/all-MiniLM-L6-v2)"
+        ),
+    )
+    product_check.add_argument(
+        "--embed_cache_dir",
+        required=False,
+        help="Optional embedding cache directory for sentence-transformers",
+    )
+    product_check.add_argument(
+        "--embed_local_only",
+        default=False,
+        type=_parse_bool,
+        help="Load embedding model from local cache/files only (default false)",
+    )
+    product_check.add_argument(
+        "--hf_timeout_s",
+        type=int,
+        default=30,
+        help="HuggingFace hub timeout seconds for embedding model load (default 30)",
+    )
+    product_check.add_argument(
+        "--hf_retries",
+        type=int,
+        default=3,
+        help="HuggingFace retries for embedding model load (default 3)",
+    )
+    product_check.add_argument(
+        "--top_k",
+        type=int,
+        default=20,
+        help="Number of retrieved chunks (default 20)",
+    )
+    product_check.add_argument(
+        "--content_types",
+        default="text,figure_caption",
+        help="Optional comma-separated filter: text,table,figure_caption",
+    )
+    product_check.add_argument(
+        "--max_context_chars",
+        type=int,
+        default=6000,
+        help="Maximum total context characters (default 6000)",
+    )
+    product_check.add_argument(
+        "--backend",
+        choices=["vllm", "ollama"],
+        default="ollama",
+        help="Generation backend (default ollama)",
+    )
+    product_check.add_argument(
+        "--endpoint",
+        default="http://127.0.0.1:8000/v1",
+        help="OpenAI-compatible endpoint for --backend vllm (default http://127.0.0.1:8000/v1)",
+    )
+    product_check.add_argument(
+        "--model",
+        default="qwen3-vl",
+        help="Model name for --backend vllm (default qwen3-vl)",
+    )
+    product_check.add_argument(
+        "--ollama_url",
+        default=DEFAULT_OLLAMA_URL,
+        help=f"Ollama URL for --backend ollama (default {DEFAULT_OLLAMA_URL})",
+    )
+    product_check.add_argument(
+        "--ollama_model",
+        default=DEFAULT_OLLAMA_MODEL,
+        help=f"Ollama model for --backend ollama (default {DEFAULT_OLLAMA_MODEL})",
+    )
+    product_check.add_argument(
+        "--ollama_format",
+        choices=["text", "json"],
+        default="text",
+        help=(
+            "Ollama answer mode for --backend ollama (default text). "
+            "'json' still uses JSON-in-text parsing and does not force wire format=json."
+        ),
+    )
+    product_check.add_argument(
+        "--ollama_num_ctx",
+        type=int,
+        required=False,
+        help="Optional Ollama options.num_ctx override",
+    )
+    product_check.add_argument(
+        "--ollama_api",
+        choices=["chat", "generate"],
+        default="generate",
+        help="Ollama endpoint mode for product checks (default generate)",
+    )
+    product_check.add_argument(
+        "--max_tokens",
+        type=int,
+        default=512,
+        help="Max generation tokens (default 512)",
+    )
+    product_check.add_argument(
+        "--temperature",
+        type=float,
+        default=0.2,
+        help="Sampling temperature (default 0.2)",
+    )
+    product_check.add_argument(
+        "--ollama_num_predict",
+        type=int,
+        default=1536,
+        help="Ollama options.num_predict for first attempt (default 1536)",
+    )
+    product_check.add_argument(
+        "--ollama_retry_num_predict",
+        type=int,
+        default=2048,
+        help="Ollama options.num_predict for retry attempt (default 2048)",
+    )
+    product_check.add_argument(
+        "--ollama_num_predict_auto",
+        default=True,
+        type=_parse_bool,
+        help=(
+            "Auto-tune Ollama num_predict for large contexts (>=7000 chars): "
+            "first>=2048, retry>=3072, cap 4096 (default true)"
+        ),
+    )
+    product_check.add_argument(
+        "--ollama_think",
+        type=_parse_ollama_think_arg,
+        choices=[False, True, "high", "medium", "low"],
+        default=False,
+        help=(
+            "Ollama top-level think mode for --backend ollama "
+            "(default false; allowed: false,true,high,medium,low)"
+        ),
+    )
+    product_check.add_argument(
+        "--force_citations",
+        default=False,
+        type=_parse_bool,
+        help=(
+            "Force citation markers in generated answers via strict prompt policy "
+            "(default false)"
+        ),
+    )
+    product_check.add_argument(
+        "--citation_min_count",
+        type=int,
+        default=1,
+        help="Minimum citation markers required when --force_citations=true (default 1)",
+    )
+    product_check.add_argument(
+        "--citation_repair_retry",
+        default="auto",
+        choices=["auto", "true", "false"],
+        help=(
+            "Run one citation-repair retry when citations are below minimum. "
+            "auto: true when --force_citations=true, else false (default auto)."
+        ),
+    )
+    product_check.add_argument(
+        "--timeout_s",
+        type=int,
+        default=30,
+        help="Qdrant HTTP timeout in seconds (default 30)",
+    )
+    product_check.set_defaults(func=_cmd_product_check)
 
     rag_preview = subparsers.add_parser(
         "rag-preview",
@@ -1945,6 +2683,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     compare_baseline.set_defaults(func=_cmd_compare_baseline)
 
+    compare_product_baseline = subparsers.add_parser(
+        "compare-product-baseline",
+        help="Compare product-check report.json outputs for product regression gating",
+    )
+    compare_product_baseline.add_argument(
+        "--baseline_report",
+        required=True,
+        help="Path to baseline product-check report.json",
+    )
+    compare_product_baseline.add_argument(
+        "--current_report",
+        required=True,
+        help="Path to current product-check report.json",
+    )
+    compare_product_baseline.add_argument(
+        "--out",
+        required=True,
+        help="Output directory for compare_report.json",
+    )
+    compare_product_baseline.add_argument(
+        "--max_fail_increase",
+        type=int,
+        required=False,
+        help="Optional threshold for allowed increase in failed checks",
+    )
+    compare_product_baseline.set_defaults(func=_cmd_compare_product_baseline)
+
     ollama_debug = subparsers.add_parser(
         "ollama-debug",
         help="Run direct Ollama debug loop for empty-content/thinking issues",
@@ -2017,6 +2782,55 @@ def build_parser() -> argparse.ArgumentParser:
         help="Artifact directory (default /tmp/bookmind_ollama_debug)",
     )
     ollama_debug.set_defaults(func=_cmd_ollama_debug)
+
+    serve = subparsers.add_parser(
+        "serve",
+        help="Run local FastAPI service for ask endpoint",
+    )
+    serve.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Bind host (default 127.0.0.1)",
+    )
+    serve.add_argument(
+        "--port",
+        type=int,
+        default=8001,
+        help="Bind port (default 8001)",
+    )
+    serve.add_argument(
+        "--qdrant_url",
+        default="http://127.0.0.1:6333",
+        help="Default Qdrant URL for API requests (default http://127.0.0.1:6333)",
+    )
+    serve.add_argument(
+        "--collection",
+        default="bookmind_bench",
+        help="Default Qdrant collection for API requests (default bookmind_bench)",
+    )
+    serve.add_argument(
+        "--backend",
+        choices=["vllm", "ollama"],
+        default="ollama",
+        help="Default generation backend for API requests (default ollama)",
+    )
+    serve.add_argument(
+        "--ollama_url",
+        default=DEFAULT_OLLAMA_URL,
+        help=f"Default Ollama URL for API requests (default {DEFAULT_OLLAMA_URL})",
+    )
+    serve.add_argument(
+        "--ollama_model",
+        default=DEFAULT_OLLAMA_MODEL,
+        help=f"Default Ollama model for API requests (default {DEFAULT_OLLAMA_MODEL})",
+    )
+    serve.add_argument(
+        "--ollama_api",
+        choices=["chat", "generate"],
+        default="generate",
+        help="Default Ollama API for API requests (default generate)",
+    )
+    serve.set_defaults(func=_cmd_serve)
 
     return parser
 

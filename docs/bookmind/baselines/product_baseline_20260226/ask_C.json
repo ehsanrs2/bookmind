@@ -1,0 +1,184 @@
+{
+  "query": "What hydraulic pressure setpoints are specified for the landing gear system?",
+  "final_answer": "NOT_FOUND",
+  "status": "NOT_FOUND",
+  "verification_status": "FAIL_NO_CITATIONS",
+  "verification_reason": "Model answer has no citation markers.",
+  "citations_total": 0,
+  "citations_resolved": 0,
+  "citations_resolvable": true,
+  "cited_pages": [],
+  "cited_ids": [],
+  "first_cited_rank": null,
+  "retrieved_rows": [
+    {
+      "rank": 1,
+      "score": 0.4551795,
+      "page": 4,
+      "stable_id": "3debb46fff0b981e",
+      "chunk_id": "",
+      "content_type": "figure_caption"
+    },
+    {
+      "rank": 2,
+      "score": 0.4162583,
+      "page": 4,
+      "stable_id": "4d78dfdc809458b8",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 3,
+      "score": 0.38557297,
+      "page": 4,
+      "stable_id": "0f3c7bce65c385b6",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 4,
+      "score": 0.3850897,
+      "page": 4,
+      "stable_id": "0f52470aec38e28e",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 5,
+      "score": 0.3840919,
+      "page": 5,
+      "stable_id": "797db5dbc0ac9feb",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 6,
+      "score": 0.3840919,
+      "page": 5,
+      "stable_id": "6ccf40464264ebdc",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 7,
+      "score": 0.37186143,
+      "page": 5,
+      "stable_id": "f8e622797682c2b5",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 8,
+      "score": 0.3465789,
+      "page": 5,
+      "stable_id": "c105d15ef7c29182",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 9,
+      "score": 0.33576262,
+      "page": 5,
+      "stable_id": "ddbb17636dfc2209",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 10,
+      "score": 0.32388085,
+      "page": 5,
+      "stable_id": "b5d09daae8d54c0c",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 11,
+      "score": 0.30958277,
+      "page": 3,
+      "stable_id": "30026ff16750f7c9",
+      "chunk_id": "v1_6043f73eb219ed261a4d1c7ff0db4ff0ba179d90",
+      "content_type": "text"
+    },
+    {
+      "rank": 12,
+      "score": 0.3095168,
+      "page": 4,
+      "stable_id": "94080d280f711874",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 13,
+      "score": 0.30811667,
+      "page": 3,
+      "stable_id": "3c118faa06468da1",
+      "chunk_id": "v1_4cd7131c9291bb0a897188d35cac59e90cdd502e",
+      "content_type": "text"
+    },
+    {
+      "rank": 14,
+      "score": 0.30594587,
+      "page": 4,
+      "stable_id": "65fc46e338b61a37",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 15,
+      "score": 0.30346715,
+      "page": 4,
+      "stable_id": "7664b8bb457520de",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 16,
+      "score": 0.29478475,
+      "page": 5,
+      "stable_id": "6252cae1cb1c46e3",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 17,
+      "score": 0.2854077,
+      "page": 5,
+      "stable_id": "bef70edb076d5a50",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 18,
+      "score": 0.28409538,
+      "page": 1,
+      "stable_id": "f4e8708cad46accf",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 19,
+      "score": 0.2833345,
+      "page": 4,
+      "stable_id": "f07978c0d339edc2",
+      "chunk_id": "",
+      "content_type": "text"
+    },
+    {
+      "rank": 20,
+      "score": 0.27801478,
+      "page": 3,
+      "stable_id": "cbb49ca678a6927d",
+      "chunk_id": "",
+      "content_type": "figure_caption"
+    }
+  ],
+  "config": {
+    "top_k": 20,
+    "content_types": [
+      "text",
+      "figure_caption"
+    ],
+    "backend": "ollama",
+    "force_citations": true
+  }
+}

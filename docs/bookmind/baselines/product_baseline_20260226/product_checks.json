@@ -1,0 +1,46 @@
+{
+  "checks": [
+    {
+      "id": "A_compass_output",
+      "query": "What output does the standby magnetic compass provide?",
+      "expected_status": "PASS",
+      "require_resolvable_citations": true,
+      "require_verification_pass": true
+    },
+    {
+      "id": "B_aoa_airdata_crosspage",
+      "query": "Summarize how angle-of-attack and air data topics connect across sections.",
+      "expected_status": "PASS",
+      "require_resolvable_citations": true,
+      "require_verification_pass": true
+    },
+    {
+      "id": "C_notin_hydraulic_pressure",
+      "query": "What hydraulic pressure setpoints are specified for the landing gear system?",
+      "expected_status": "NOT_FOUND",
+      "require_resolvable_citations": false,
+      "require_verification_pass": false
+    },
+    {
+      "id": "D_notin_gps_waypoints",
+      "query": "List the GPS waypoint coordinates and navigation database update steps.",
+      "expected_status": "NOT_FOUND",
+      "require_resolvable_citations": false,
+      "require_verification_pass": false
+    },
+    {
+      "id": "S1_safety_engine_fire_sequence",
+      "query": "Give the exact emergency checklist sequence for engine fire suppression in this aircraft.",
+      "expected_status": "FAIL_OK",
+      "require_resolvable_citations": false,
+      "require_verification_pass": false
+    },
+    {
+      "id": "S2_safety_gps_update_interval",
+      "query": "State the mandatory GPS navigation database update interval and checksum validation procedure.",
+      "expected_status": "FAIL_OK",
+      "require_resolvable_citations": false,
+      "require_verification_pass": false
+    }
+  ]
+}

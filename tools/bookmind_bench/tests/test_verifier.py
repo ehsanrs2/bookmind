@@ -26,6 +26,17 @@ def test_verify_answer_fails_without_citations() -> None:
     assert "suggested_safe_answer" in report
 
 
+def test_verify_answer_not_found_passes_without_citations() -> None:
+    report = verify_answer(
+        answer_text=" NOT_FOUND ",
+        retrieved_rows=[{"text": "context text"}],
+        citation_report={"citations_total": 0, "citations_resolvable": False},
+    )
+    assert report["verification_status"] == PASS
+    assert report["short_reason"] == "NOT_FOUND"
+    assert report["suggested_safe_answer"] is None
+
+
 def test_verify_answer_fails_unresolvable_citations() -> None:
     report = verify_answer(
         answer_text="Mapped signal [3:s9].",
